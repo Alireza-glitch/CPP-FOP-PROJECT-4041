@@ -3036,3 +3036,376 @@ void SpriteManagerUI_uploadCostume(SpriteManagerUI* ui, const char* filepath) {
     }
     free(fullPath);
 }
+// BackdropManagerUI functions
+// ============================================================================
+BackdropManagerUI* BackdropManagerUI_create(SDL_Renderer* ren, Project* proj) {
+    BackdropManagerUI* ui = new BackdropManagerUI;
+    ui->renderer = ren;
+    ui->project = proj;
+    ui->selectedBackdropIndex = -1;
+    ui->scrollOffset = 0;
+    ui->rect = {0, 0, 0, 0};
+    char* fontPath = findFontFile("arial.ttf");
+    ui->font = TTF_OpenFont(fontPath, 12);
+    free(fontPath);
+    return ui;
+}
+
+void BackdropManagerUI_destroy(BackdropManagerUI* ui) {
+    if (ui->font) TTF_CloseFont(ui->font);
+    delete ui;
+}
+
+void BackdropManagerUI_render(BackdropManagerUI* ui) {
+    SDL_SetRenderDrawColor(ui->renderer, 220, 220, 220, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->rect);
+    SDL_SetRenderDrawColor(ui->renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->rect);
+
+    int thumbHeight = 70;
+    int startY = ui->rect.y + 10 - ui->scrollOffset;
+
+    for (size_t i = 0; i < ui->project->backdrops.size(); i++) {
+        int y = startY + i * thumbHeight;
+        if (y + 60 > ui->rect.y + ui->rect.h || y < ui->rect.y) {
+            continue;
+        }
+        SDL_Rect thumbRect = {ui->rect.x + 10, y, 100, 60};
+        Backdrop* b = ui->project->backdrops[i];
+        if (b->texture) {
+            SDL_RenderCopy(ui->renderer, b->texture, NULL, &thumbRect);
+        } else {
+            SDL_SetRenderDrawColor(ui->renderer, 180, 180, 180, 255);
+            SDL_RenderFillRect(ui->renderer, &thumbRect);
+        }
+        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(ui->renderer, &thumbRect);
+        if ((int)i == ui->selectedBackdropIndex) {
+            SDL_SetRenderDrawColor(ui->renderer, 255, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &thumbRect);
+        }
+        if (ui->font) {
+            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, b->name.c_str(), {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                SDL_Rect textRect = {ui->rect.x + 115, y + 20, surf->w, surf->h};
+                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+    }
+}
+
+void BackdropManagerUI_handleEvent(BackdropManagerUI* ui, SDL_Event* e) {
+    if (e->type == SDL_MOUSEBUTTONDOWN) {
+        int x = e->button.x, y = e->button.y;
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            int thumbHeight = 70;
+            int startY = ui->rect.y + 10 - ui->scrollOffset;
+            int index = (y - startY) / thumbHeight;
+            if (index >= 0 && index < (int)ui->project->backdrops.size()) {
+                int thumbY = startY + index * thumbHeight;
+                if (y >= thumbY && y <= thumbY + 60) {
+                    ui->selectedBackdropIndex = index;
+                    ui->project->currentBackdrop = index;
+                }
+            }
+        }
+    } else if (e->type == SDL_MOUSEWHEEL) {
+        if (e->wheel.y != 0) {
+            ui->scrollOffset -= e->wheel.y * 20;
+            int maxOffset = (ui->project->backdrops.size() * 70 + 10) - ui->rect.h;
+            if (maxOffset < 0) maxOffset = 0;
+            if (ui->scrollOffset < 0) ui->scrollOffset = 0;
+            if (ui->scrollOffset > maxOffset) ui->scrollOffset = maxOffset;
+        }
+    }
+}
+
+void BackdropManagerUI_uploadBackdrop(BackdropManagerUI* ui, const char* filepath) {
+    if (ui->selectedBackdropIndex < 0) {
+        printf("No backdrop selected.\n");
+        return;
+    }
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        printf("File %s not found. Please place it in the program directory.\n", filepath);
+        return;
+    }
+    fclose(f);
+
+    char* fullPath = findFontFile(filepath);
+    Backdrop* b = ui->project->backdrops[ui->selectedBackdropIndex];
+    SDL_Texture* tex = loadTexture(ui->renderer, fullPath);
+    if (tex) {
+        if (b->texture) SDL_DestroyTexture(b->texture);
+        b->texture = tex;
+        printf("Backdrop successfully loaded from %s\n", fullPath);
+    } else {
+        printf("Error loading image from path: %s\n", fullPath);
+    }
+    free(fullPath);
+}
+// SoundManagerUI functions
+SoundManagerUI* SoundManagerUI_create(SDL_Renderer* ren, Project* proj) {
+    SoundManagerUI* ui = new SoundManagerUI;
+    ui->renderer = ren;
+    ui->project = proj;
+    ui->selectedSoundIndex = -1;
+    ui->scrollOffset = 0;
+    ui->rect = {0, 0, 0, 0};
+    char* fontPath = findFontFile("arial.ttf");
+    ui->font = TTF_OpenFont(fontPath, 12);
+    free(fontPath);
+    if (!ui->font) {
+        printf("Warning: Could not load font for sound manager\n");
+    }
+    return ui;
+}
+
+void SoundManagerUI_destroy(SoundManagerUI* ui) {
+    if (ui->font) TTF_CloseFont(ui->font);
+    delete ui;
+}
+
+void SoundManagerUI_render(SoundManagerUI* ui) {
+    SDL_SetRenderDrawColor(ui->renderer, 220, 220, 220, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->rect);
+    SDL_SetRenderDrawColor(ui->renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->rect);
+
+    int btnW = 80;
+    int btnH = 25;
+    int btnY = ui->rect.y + 5;
+    SDL_Rect libBtn = {ui->rect.x + 10, btnY, btnW, btnH};
+    SDL_Rect randBtn = {ui->rect.x + 10 + btnW + 10, btnY, btnW, btnH};
+
+    SDL_SetRenderDrawColor(ui->renderer, 100, 150, 200, 255);
+    SDL_RenderFillRect(ui->renderer, &libBtn);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(ui->renderer, &libBtn);
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "📁 Library", {255,255,255,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {libBtn.x + (btnW - surf->w)/2, libBtn.y + (btnH - surf->h)/2, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+
+    SDL_SetRenderDrawColor(ui->renderer, 150, 100, 200, 255);
+    SDL_RenderFillRect(ui->renderer, &randBtn);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(ui->renderer, &randBtn);
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "🎲 Random", {255,255,255,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {randBtn.x + (btnW - surf->w)/2, randBtn.y + (btnH - surf->h)/2, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+
+    int itemHeight = 60;
+    int startY = ui->rect.y + 10 + btnH + 10 - ui->scrollOffset;
+
+    for (size_t i = 0; i < ui->project->sounds.size(); i++) {
+        int y = startY + i * itemHeight;
+        if (y + 50 > ui->rect.y + ui->rect.h || y < ui->rect.y) {
+            continue;
+        }
+        SDL_Rect itemRect = {ui->rect.x + 10, y, ui->rect.w - 20, 50};
+        SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+        SDL_RenderFillRect(ui->renderer, &itemRect);
+        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(ui->renderer, &itemRect);
+
+        if ((int)i == ui->selectedSoundIndex) {
+            SDL_SetRenderDrawColor(ui->renderer, 255, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &itemRect);
+        }
+
+        if (ui->font) {
+            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, ui->project->sounds[i]->name.c_str(), {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                SDL_Rect textRect = {itemRect.x + 5, itemRect.y + 5, surf->w, surf->h};
+                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+
+            char status[50];
+            snprintf(status, sizeof(status), "Vol: %.0f%% %s", ui->project->sounds[i]->volume,
+                     ui->project->sounds[i]->muted ? "(Muted)" : "");
+            SDL_Surface* surf2 = TTF_RenderText_Blended(ui->font, status, {0,0,0,255});
+            if (surf2) {
+                SDL_Texture* tex2 = SDL_CreateTextureFromSurface(ui->renderer, surf2);
+                SDL_Rect textRect2 = {itemRect.x + 5, itemRect.y + 25, surf2->w, surf2->h};
+                SDL_RenderCopy(ui->renderer, tex2, NULL, &textRect2);
+                SDL_DestroyTexture(tex2);
+                SDL_FreeSurface(surf2);
+            }
+
+            int btnW = 25;
+            int btnH = 20;
+            int btnX = itemRect.x + itemRect.w - btnW * 3 - 5;
+            int btnY = itemRect.y + 5;
+
+            SDL_Rect btnPlus = {btnX + btnW * 2 + 5, btnY, btnW, btnH};
+            SDL_SetRenderDrawColor(ui->renderer, 100, 200, 100, 255);
+            SDL_RenderFillRect(ui->renderer, &btnPlus);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &btnPlus);
+            SDL_Surface* plusSurf = TTF_RenderText_Blended(ui->font, "+", {0,0,0,255});
+            if (plusSurf) {
+                SDL_Texture* plusTex = SDL_CreateTextureFromSurface(ui->renderer, plusSurf);
+                SDL_Rect textRect = {btnPlus.x + (btnW - plusSurf->w)/2, btnPlus.y + (btnH - plusSurf->h)/2, plusSurf->w, plusSurf->h};
+                SDL_RenderCopy(ui->renderer, plusTex, NULL, &textRect);
+                SDL_DestroyTexture(plusTex);
+                SDL_FreeSurface(plusSurf);
+            }
+
+            SDL_Rect btnMinus = {btnX + btnW + 5, btnY, btnW, btnH};
+            SDL_SetRenderDrawColor(ui->renderer, 200, 100, 100, 255);
+            SDL_RenderFillRect(ui->renderer, &btnMinus);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &btnMinus);
+            SDL_Surface* minusSurf = TTF_RenderText_Blended(ui->font, "-", {0,0,0,255});
+            if (minusSurf) {
+                SDL_Texture* minusTex = SDL_CreateTextureFromSurface(ui->renderer, minusSurf);
+                SDL_Rect textRect = {btnMinus.x + (btnW - minusSurf->w)/2, btnMinus.y + (btnH - minusSurf->h)/2, minusSurf->w, minusSurf->h};
+                SDL_RenderCopy(ui->renderer, minusTex, NULL, &textRect);
+                SDL_DestroyTexture(minusTex);
+                SDL_FreeSurface(minusSurf);
+            }
+
+            SDL_Rect btnMute = {btnX, btnY, btnW, btnH};
+            SDL_Color muteColor = ui->project->sounds[i]->muted ? (SDL_Color){200, 200, 100, 255} : (SDL_Color){100, 100, 200, 255};
+            SDL_SetRenderDrawColor(ui->renderer, muteColor.r, muteColor.g, muteColor.b, 255);
+            SDL_RenderFillRect(ui->renderer, &btnMute);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &btnMute);
+            SDL_Surface* muteSurf = TTF_RenderText_Blended(ui->font, "M", {0,0,0,255});
+            if (muteSurf) {
+                SDL_Texture* muteTex = SDL_CreateTextureFromSurface(ui->renderer, muteSurf);
+                SDL_Rect textRect = {btnMute.x + (btnW - muteSurf->w)/2, btnMute.y + (btnH - muteSurf->h)/2, muteSurf->w, muteSurf->h};
+                SDL_RenderCopy(ui->renderer, muteTex, NULL, &textRect);
+                SDL_DestroyTexture(muteTex);
+                SDL_FreeSurface(muteSurf);
+            }
+        }
+    }
+}
+
+void SoundManagerUI_handleEvent(SoundManagerUI* ui, SDL_Event* e) {
+    if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+        int x = e->button.x, y = e->button.y;
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+
+            int btnW = 80;
+            int btnH = 25;
+            int btnY = ui->rect.y + 5;
+            SDL_Rect libBtn = {ui->rect.x + 10, btnY, btnW, btnH};
+            SDL_Rect randBtn = {ui->rect.x + 10 + btnW + 10, btnY, btnW, btnH};
+
+            if (x >= libBtn.x && x <= libBtn.x + libBtn.w && y >= libBtn.y && y <= libBtn.y + libBtn.h) {
+                Project_addSoundFromFile(ui->project, "Pop", "pop.wav");
+                ui->selectedSoundIndex = ui->project->sounds.size() - 1;
+                return;
+            }
+            if (x >= randBtn.x && x <= randBtn.x + randBtn.w && y >= randBtn.y && y <= randBtn.y + randBtn.h) {
+                int r = rand() % 2;
+                if (r == 0) {
+                    Project_addSoundFromFile(ui->project, "Pop", "pop.wav");
+                } else {
+                    Project_addSoundFromFile(ui->project, "Meow", "meow.wav");
+                }
+                ui->selectedSoundIndex = ui->project->sounds.size() - 1;
+                return;
+            }
+
+            int itemHeight = 60;
+            int startY = ui->rect.y + 10 + btnH + 10 - ui->scrollOffset;
+            int index = (y - startY) / itemHeight;
+            if (index >= 0 && index < (int)ui->project->sounds.size()) {
+                int itemY = startY + index * itemHeight;
+                if (y >= itemY && y <= itemY + 50) {
+                    int btnW = 25;
+                    int btnH = 20;
+                    int btnX = ui->rect.x + 10 + (ui->rect.w - 20) - btnW * 3 - 5;
+                    int btnY = itemY + 5;
+
+                    SDL_Rect btnMute = {btnX, btnY, btnW, btnH};
+                    SDL_Rect btnMinus = {btnX + btnW + 5, btnY, btnW, btnH};
+                    SDL_Rect btnPlus = {btnX + btnW*2 + 10, btnY, btnW, btnH};
+
+                    if (x >= btnPlus.x && x <= btnPlus.x + btnPlus.w && y >= btnPlus.y && y <= btnPlus.y + btnPlus.h) {
+                        Sound* snd = ui->project->sounds[index];
+                        snd->volume += 10;
+                        if (snd->volume > 100) snd->volume = 100;
+                        return;
+                    }
+                    if (x >= btnMinus.x && x <= btnMinus.x + btnMinus.w && y >= btnMinus.y && y <= btnMinus.y + btnMinus.h) {
+                        Sound* snd = ui->project->sounds[index];
+                        snd->volume -= 10;
+                        if (snd->volume < 0) snd->volume = 0;
+                        return;
+                    }
+                    if (x >= btnMute.x && x <= btnMute.x + btnMute.w && y >= btnMute.y && y <= btnMute.y + btnMute.h) {
+                        Sound* snd = ui->project->sounds[index];
+                        snd->muted = !snd->muted;
+                        return;
+                    }
+
+                    ui->selectedSoundIndex = index;
+                }
+            }
+        }
+    } else if (e->type == SDL_MOUSEWHEEL) {
+        if (e->wheel.y != 0) {
+            ui->scrollOffset -= e->wheel.y * 20;
+            int maxOffset = (ui->project->sounds.size() * 60 + 10) - ui->rect.h;
+            if (maxOffset < 0) maxOffset = 0;
+            if (ui->scrollOffset < 0) ui->scrollOffset = 0;
+            if (ui->scrollOffset > maxOffset) ui->scrollOffset = maxOffset;
+        }
+    }
+}
+
+void SoundManagerUI_uploadSound(SoundManagerUI* ui, const char* filepath) {
+    if (ui->selectedSoundIndex < 0) {
+        printf("No sound selected.\n");
+        return;
+    }
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        printf("File %s not found. Please place it in the program directory.\n", filepath);
+        return;
+    }
+    fclose(f);
+
+    char* fullPath = findFontFile(filepath);
+    Sound* snd = ui->project->sounds[ui->selectedSoundIndex];
+    Mix_Chunk* chunk = Mix_LoadWAV(fullPath);
+    if (chunk) {
+        if (snd->chunk) Mix_FreeChunk(snd->chunk);
+        snd->chunk = chunk;
+        const char* basename = strrchr(filepath, '/');
+        if (!basename) basename = strrchr(filepath, '\\');
+        if (!basename) basename = filepath;
+        else basename++;
+        snd->name = basename;
+        printf("Sound loaded from %s\n", fullPath);
+    } else {
+        printf("Failed to load sound: %s\n", Mix_GetError());
+    }
+    free(fullPath);
+}
