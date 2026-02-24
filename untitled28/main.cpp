@@ -2599,3 +2599,440 @@ bool findBlockAt(CodeAreaUI* ui, int mouseX, int mouseY, int* outScriptIndex, in
     }
     return false;
 }
+// SpriteManagerUI functions
+// ============================================================================
+SpriteManagerUI* SpriteManagerUI_create(SDL_Renderer* ren, Project* proj) {
+    SpriteManagerUI* ui = new SpriteManagerUI;
+    ui->renderer = ren;
+    ui->project = proj;
+    ui->selectedSpriteIndex = -1;
+    ui->scrollOffset = 0;
+    ui->rect = {0, 0, 0, 0};
+    char* fontPath = findFontFile("arial.ttf");
+    ui->font = TTF_OpenFont(fontPath, 12);
+    free(fontPath);
+    if (!ui->font) {
+        printf("TTF_OpenFont error: could not find arial.ttf\n");
+    }
+    ui->editingName = -1;
+    ui->editingField = 0;
+    ui->editingSpriteIndex = -1;
+    ui->lastClickTime = 0;
+    ui->lastClickedIndex = -1;
+    return ui;
+}
+
+void SpriteManagerUI_destroy(SpriteManagerUI* ui) {
+    if (ui->font) TTF_CloseFont(ui->font);
+    delete ui;
+}
+
+void SpriteManagerUI_render(SpriteManagerUI* ui) {
+    SDL_SetRenderDrawColor(ui->renderer, 240, 240, 240, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->rect);
+    SDL_SetRenderDrawColor(ui->renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->rect);
+
+    int iconSize = 50;
+    int spacing = 70;
+    int startX = ui->rect.x + 10;
+    int startY = ui->rect.y + 10 - ui->scrollOffset;
+
+    for (size_t i = 0; i < ui->project->sprites.size(); i++) {
+        Sprite* s = ui->project->sprites[i];
+        int x = startX + i * spacing;
+        int y = startY;
+        if (y + iconSize + 30 > ui->rect.y + ui->rect.h || y < ui->rect.y) {
+            continue;
+        }
+        SDL_Rect iconRect = {x, y, iconSize, iconSize};
+        if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size() && s->costumes[s->currentCostume]->texture) {
+            SDL_RenderCopy(ui->renderer, s->costumes[s->currentCostume]->texture, NULL, &iconRect);
+        } else {
+            Uint8 r = (s->currentCostume * 50) % 256;
+            Uint8 g = (s->currentCostume * 80) % 256;
+            Uint8 b = (s->currentCostume * 110) % 256;
+            SDL_SetRenderDrawColor(ui->renderer, r, g, b, 255);
+            SDL_RenderFillRect(ui->renderer, &iconRect);
+        }
+        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(ui->renderer, &iconRect);
+        if ((int)i == ui->selectedSpriteIndex) {
+            SDL_SetRenderDrawColor(ui->renderer, 255, 0, 0, 255);
+            for (int thickness = 1; thickness <= 3; thickness++) {
+                SDL_Rect borderRect = {x - thickness, y - thickness, iconSize + 2*thickness, iconSize + 2*thickness};
+                SDL_RenderDrawRect(ui->renderer, &borderRect);
+            }
+        }
+
+        if (ui->font) {
+            string nameBuffer;
+            SDL_Color textColor = {0, 0, 0, 255};
+            SDL_Rect textRect = {x, y + iconSize + 2, 0, 0};
+
+            if (ui->editingName == (int)i) {
+                nameBuffer = ui->nameEditBuffer;
+                SDL_Rect editBg = {x - 2, y + iconSize, 100, 18};
+                SDL_SetRenderDrawColor(ui->renderer, 255, 255, 255, 255);
+                SDL_RenderFillRect(ui->renderer, &editBg);
+                SDL_SetRenderDrawColor(ui->renderer, 0, 0, 255, 255);
+                SDL_RenderDrawRect(ui->renderer, &editBg);
+            } else {
+                nameBuffer = s->name;
+            }
+
+            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, nameBuffer.c_str(), textColor);
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                textRect.w = surf->w;
+                textRect.h = surf->h;
+                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+
+        if ((int)i == ui->selectedSpriteIndex) {
+            int editX = x + iconSize + 10;
+            int editY = y;
+            int editW = 150;
+            int lineHeight = 20;
+            int btnW = 20;
+            int btnH = 18;
+
+            SDL_Rect panelRect = {editX, editY, editW, 100};
+            SDL_SetRenderDrawColor(ui->renderer, 255, 255, 255, 255);
+            SDL_RenderFillRect(ui->renderer, &panelRect);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &panelRect);
+
+            char labelX[32];
+            snprintf(labelX, sizeof(labelX), "x: %.1f", s->x);
+            SDL_Surface* surfX = TTF_RenderText_Blended(ui->font, labelX, {0,0,0,255});
+            if (surfX) {
+                SDL_Texture* texX = SDL_CreateTextureFromSurface(ui->renderer, surfX);
+                SDL_Rect textRectX = {editX + 5, editY + 5, surfX->w, surfX->h};
+                SDL_RenderCopy(ui->renderer, texX, NULL, &textRectX);
+                SDL_DestroyTexture(texX);
+                SDL_FreeSurface(surfX);
+            }
+            SDL_Rect btnXPlus = {editX + editW - btnW - 5, editY + 5, btnW, btnH};
+            SDL_Rect btnXMinus = {editX + editW - 2*btnW - 10, editY + 5, btnW, btnH};
+            SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+            SDL_RenderFillRect(ui->renderer, &btnXPlus);
+            SDL_RenderFillRect(ui->renderer, &btnXMinus);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &btnXPlus);
+            SDL_RenderDrawRect(ui->renderer, &btnXMinus);
+
+            SDL_Surface* plusSurf = TTF_RenderText_Blended(ui->font, "+", {0,0,0,255});
+            SDL_Surface* minusSurf = TTF_RenderText_Blended(ui->font, "-", {0,0,0,255});
+            SDL_Texture* plusTex = nullptr;
+            SDL_Texture* minusTex = nullptr;
+            if (plusSurf) {
+                plusTex = SDL_CreateTextureFromSurface(ui->renderer, plusSurf);
+                SDL_FreeSurface(plusSurf);
+            }
+            if (minusSurf) {
+                minusTex = SDL_CreateTextureFromSurface(ui->renderer, minusSurf);
+                SDL_FreeSurface(minusSurf);
+            }
+
+            if (plusTex && minusTex) {
+                SDL_Rect textRectPlus = {btnXPlus.x + (btnW - 8)/2, btnXPlus.y + (btnH - 8)/2, 8, 8};
+                SDL_RenderCopy(ui->renderer, plusTex, NULL, &textRectPlus);
+                SDL_Rect textRectMinus = {btnXMinus.x + (btnW - 8)/2, btnXMinus.y + (btnH - 8)/2, 8, 8};
+                SDL_RenderCopy(ui->renderer, minusTex, NULL, &textRectMinus);
+
+                char labelY[32];
+                snprintf(labelY, sizeof(labelY), "y: %.1f", s->y);
+                SDL_Surface* surfY = TTF_RenderText_Blended(ui->font, labelY, {0,0,0,255});
+                if (surfY) {
+                    SDL_Texture* texY = SDL_CreateTextureFromSurface(ui->renderer, surfY);
+                    SDL_Rect textRectY = {editX + 5, editY + 5 + lineHeight, surfY->w, surfY->h};
+                    SDL_RenderCopy(ui->renderer, texY, NULL, &textRectY);
+                    SDL_DestroyTexture(texY);
+                    SDL_FreeSurface(surfY);
+                }
+                SDL_Rect btnYPlus = {editX + editW - btnW - 5, editY + 5 + lineHeight, btnW, btnH};
+                SDL_Rect btnYMinus = {editX + editW - 2*btnW - 10, editY + 5 + lineHeight, btnW, btnH};
+                SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+                SDL_RenderFillRect(ui->renderer, &btnYPlus);
+                SDL_RenderFillRect(ui->renderer, &btnYMinus);
+                SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+                SDL_RenderDrawRect(ui->renderer, &btnYPlus);
+                SDL_RenderDrawRect(ui->renderer, &btnYMinus);
+                textRectPlus.x = btnYPlus.x + (btnW - 8)/2;
+                textRectPlus.y = btnYPlus.y + (btnH - 8)/2;
+                SDL_RenderCopy(ui->renderer, plusTex, NULL, &textRectPlus);
+                textRectMinus.x = btnYMinus.x + (btnW - 8)/2;
+                textRectMinus.y = btnYMinus.y + (btnH - 8)/2;
+                SDL_RenderCopy(ui->renderer, minusTex, NULL, &textRectMinus);
+
+                char labelDir[32];
+                snprintf(labelDir, sizeof(labelDir), "dir: %.0f", s->direction);
+                SDL_Surface* surfDir = TTF_RenderText_Blended(ui->font, labelDir, {0,0,0,255});
+                if (surfDir) {
+                    SDL_Texture* texDir = SDL_CreateTextureFromSurface(ui->renderer, surfDir);
+                    SDL_Rect textRectDir = {editX + 5, editY + 5 + 2*lineHeight, surfDir->w, surfDir->h};
+                    SDL_RenderCopy(ui->renderer, texDir, NULL, &textRectDir);
+                    SDL_DestroyTexture(texDir);
+                    SDL_FreeSurface(surfDir);
+                }
+                SDL_Rect btnDirPlus = {editX + editW - btnW - 5, editY + 5 + 2*lineHeight, btnW, btnH};
+                SDL_Rect btnDirMinus = {editX + editW - 2*btnW - 10, editY + 5 + 2*lineHeight, btnW, btnH};
+                SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+                SDL_RenderFillRect(ui->renderer, &btnDirPlus);
+                SDL_RenderFillRect(ui->renderer, &btnDirMinus);
+                SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+                SDL_RenderDrawRect(ui->renderer, &btnDirPlus);
+                SDL_RenderDrawRect(ui->renderer, &btnDirMinus);
+                textRectPlus.x = btnDirPlus.x + (btnW - 8)/2;
+                textRectPlus.y = btnDirPlus.y + (btnH - 8)/2;
+                SDL_RenderCopy(ui->renderer, plusTex, NULL, &textRectPlus);
+                textRectMinus.x = btnDirMinus.x + (btnW - 8)/2;
+                textRectMinus.y = btnDirMinus.y + (btnH - 8)/2;
+                SDL_RenderCopy(ui->renderer, minusTex, NULL, &textRectMinus);
+
+                char labelSize[32];
+                snprintf(labelSize, sizeof(labelSize), "size: %.0f%%", s->size);
+                SDL_Surface* surfSize = TTF_RenderText_Blended(ui->font, labelSize, {0,0,0,255});
+                if (surfSize) {
+                    SDL_Texture* texSize = SDL_CreateTextureFromSurface(ui->renderer, surfSize);
+                    SDL_Rect textRectSize = {editX + 5, editY + 5 + 3*lineHeight, surfSize->w, surfSize->h};
+                    SDL_RenderCopy(ui->renderer, texSize, NULL, &textRectSize);
+                    SDL_DestroyTexture(texSize);
+                    SDL_FreeSurface(surfSize);
+                }
+                SDL_Rect btnSizePlus = {editX + editW - btnW - 5, editY + 5 + 3*lineHeight, btnW, btnH};
+                SDL_Rect btnSizeMinus = {editX + editW - 2*btnW - 10, editY + 5 + 3*lineHeight, btnW, btnH};
+                SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+                SDL_RenderFillRect(ui->renderer, &btnSizePlus);
+                SDL_RenderFillRect(ui->renderer, &btnSizeMinus);
+                SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+                SDL_RenderDrawRect(ui->renderer, &btnSizePlus);
+                SDL_RenderDrawRect(ui->renderer, &btnSizeMinus);
+                textRectPlus.x = btnSizePlus.x + (btnW - 8)/2;
+                textRectPlus.y = btnSizePlus.y + (btnH - 8)/2;
+                SDL_RenderCopy(ui->renderer, plusTex, NULL, &textRectPlus);
+                textRectMinus.x = btnSizeMinus.x + (btnW - 8)/2;
+                textRectMinus.y = btnSizeMinus.y + (btnH - 8)/2;
+                SDL_RenderCopy(ui->renderer, minusTex, NULL, &textRectMinus);
+            }
+
+            SDL_Rect btnShow = {editX + 5, editY + 5 + 4*lineHeight, 60, btnH};
+            SDL_SetRenderDrawColor(ui->renderer, s->visible ? 100 : 200, s->visible ? 200 : 100, 100, 255);
+            SDL_RenderFillRect(ui->renderer, &btnShow);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &btnShow);
+            SDL_Surface* showSurf = TTF_RenderText_Blended(ui->font, s->visible ? "Hide" : "Show", {0,0,0,255});
+            if (showSurf) {
+                SDL_Texture* showTex = SDL_CreateTextureFromSurface(ui->renderer, showSurf);
+                SDL_Rect textRect = {btnShow.x + (60 - showSurf->w)/2, btnShow.y + (btnH - showSurf->h)/2, showSurf->w, showSurf->h};
+                SDL_RenderCopy(ui->renderer, showTex, NULL, &textRect);
+                SDL_DestroyTexture(showTex);
+                SDL_FreeSurface(showSurf);
+            }
+
+            SDL_Rect btnDelete = {editX + 70, editY + 5 + 4*lineHeight, 50, btnH};
+            SDL_SetRenderDrawColor(ui->renderer, 200, 100, 100, 255);
+            SDL_RenderFillRect(ui->renderer, &btnDelete);
+            SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(ui->renderer, &btnDelete);
+            SDL_Surface* delSurf = TTF_RenderText_Blended(ui->font, "Del", {0,0,0,255});
+            if (delSurf) {
+                SDL_Texture* delTex = SDL_CreateTextureFromSurface(ui->renderer, delSurf);
+                SDL_Rect textRect = {btnDelete.x + (50 - delSurf->w)/2, btnDelete.y + (btnH - delSurf->h)/2, delSurf->w, delSurf->h};
+                SDL_RenderCopy(ui->renderer, delTex, NULL, &textRect);
+                SDL_DestroyTexture(delTex);
+                SDL_FreeSurface(delSurf);
+            }
+
+            if (plusTex) SDL_DestroyTexture(plusTex);
+            if (minusTex) SDL_DestroyTexture(minusTex);
+        }
+    }
+}
+
+void SpriteManagerUI_handleEvent(SpriteManagerUI* ui, SDL_Event* e) {
+    if (e->type == SDL_MOUSEBUTTONDOWN) {
+        int x = e->button.x, y = e->button.y;
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            int iconSize = 50;
+            int spacing = 70;
+            int startX = ui->rect.x + 10;
+            int startY = ui->rect.y + 10 - ui->scrollOffset;
+            int index = (x - startX) / spacing;
+            int iconY = startY + index * spacing;
+
+            if (index >= 0 && index < (int)ui->project->sprites.size() &&
+                y >= iconY && y <= iconY + iconSize) {
+
+                Uint32 now = SDL_GetTicks();
+                if (ui->lastClickedIndex == index && now - ui->lastClickTime < 500) {
+                    ui->editingName = index;
+                    ui->nameEditBuffer = ui->project->sprites[index]->name;
+                    SDL_StartTextInput();
+                    ui->lastClickTime = 0;
+                    ui->lastClickedIndex = -1;
+                } else {
+                    ui->selectedSpriteIndex = index;
+                    ui->lastClickTime = now;
+                    ui->lastClickedIndex = index;
+                    ui->editingName = -1;
+                    SDL_StopTextInput();
+                }
+                return;
+            } else {
+                if (ui->selectedSpriteIndex >= 0 && ui->selectedSpriteIndex < (int)ui->project->sprites.size()) {
+                    Sprite* s = ui->project->sprites[ui->selectedSpriteIndex];
+                    int selectedIconY = startY + ui->selectedSpriteIndex * spacing;
+                    int editX = startX + ui->selectedSpriteIndex * spacing + iconSize + 10;
+                    int editY = selectedIconY;
+                    int editW = 150;
+                    int lineHeight = 20;
+                    int btnW = 20;
+                    int btnH = 18;
+
+                    SDL_Rect btnXPlus = {editX + editW - btnW - 5, editY + 5, btnW, btnH};
+                    SDL_Rect btnXMinus = {editX + editW - 2*btnW - 10, editY + 5, btnW, btnH};
+                    if (x >= btnXPlus.x && x <= btnXPlus.x + btnXPlus.w && y >= btnXPlus.y && y <= btnXPlus.y + btnXPlus.h) {
+                        s->x += 10;
+                        if (s->x > 240) s->x = 240;
+                        return;
+                    }
+                    if (x >= btnXMinus.x && x <= btnXMinus.x + btnXMinus.w && y >= btnXMinus.y && y <= btnXMinus.y + btnXMinus.h) {
+                        s->x -= 10;
+                        if (s->x < -240) s->x = -240;
+                        return;
+                    }
+
+                    SDL_Rect btnYPlus = {editX + editW - btnW - 5, editY + 5 + lineHeight, btnW, btnH};
+                    SDL_Rect btnYMinus = {editX + editW - 2*btnW - 10, editY + 5 + lineHeight, btnW, btnH};
+                    if (x >= btnYPlus.x && x <= btnYPlus.x + btnYPlus.w && y >= btnYPlus.y && y <= btnYPlus.y + btnYPlus.h) {
+                        s->y += 10;
+                        if (s->y > 180) s->y = 180;
+                        return;
+                    }
+                    if (x >= btnYMinus.x && x <= btnYMinus.x + btnYMinus.w && y >= btnYMinus.y && y <= btnYMinus.y + btnYMinus.h) {
+                        s->y -= 10;
+                        if (s->y < -180) s->y = -180;
+                        return;
+                    }
+
+                    SDL_Rect btnDirPlus = {editX + editW - btnW - 5, editY + 5 + 2*lineHeight, btnW, btnH};
+                    SDL_Rect btnDirMinus = {editX + editW - 2*btnW - 10, editY + 5 + 2*lineHeight, btnW, btnH};
+                    if (x >= btnDirPlus.x && x <= btnDirPlus.x + btnDirPlus.w && y >= btnDirPlus.y && y <= btnDirPlus.y + btnDirPlus.h) {
+                        s->direction += 15;
+                        if (s->direction >= 360) s->direction -= 360;
+                        return;
+                    }
+                    if (x >= btnDirMinus.x && x <= btnDirMinus.x + btnDirMinus.w && y >= btnDirMinus.y && y <= btnDirMinus.y + btnDirMinus.h) {
+                        s->direction -= 15;
+                        if (s->direction < 0) s->direction += 360;
+                        return;
+                    }
+
+                    SDL_Rect btnSizePlus = {editX + editW - btnW - 5, editY + 5 + 3*lineHeight, btnW, btnH};
+                    SDL_Rect btnSizeMinus = {editX + editW - 2*btnW - 10, editY + 5 + 3*lineHeight, btnW, btnH};
+                    if (x >= btnSizePlus.x && x <= btnSizePlus.x + btnSizePlus.w && y >= btnSizePlus.y && y <= btnSizePlus.y + btnSizePlus.h) {
+                        s->size += 10;
+                        if (s->size > 200) s->size = 200;
+                        return;
+                    }
+                    if (x >= btnSizeMinus.x && x <= btnSizeMinus.x + btnSizeMinus.w && y >= btnSizeMinus.y && y <= btnSizeMinus.y + btnSizeMinus.h) {
+                        s->size -= 10;
+                        if (s->size < 10) s->size = 10;
+                        return;
+                    }
+
+                    SDL_Rect btnShow = {editX + 5, editY + 5 + 4*lineHeight, 60, btnH};
+                    if (x >= btnShow.x && x <= btnShow.x + btnShow.w && y >= btnShow.y && y <= btnShow.y + btnShow.h) {
+                        s->visible = !s->visible;
+                        return;
+                    }
+
+                    SDL_Rect btnDelete = {editX + 70, editY + 5 + 4*lineHeight, 50, btnH};
+                    if (x >= btnDelete.x && x <= btnDelete.x + btnDelete.w && y >= btnDelete.y && y <= btnDelete.y + btnDelete.h) {
+                        if (ui->selectedSpriteIndex >= 0) {
+                            Sprite* s = ui->project->sprites[ui->selectedSpriteIndex];
+                            for (Costume* c : s->costumes) {
+                                if (c->texture) SDL_DestroyTexture(c->texture);
+                                delete c;
+                            }
+                            for (Script* scr : s->scripts) {
+                                for (Block* b : scr->blocks) {
+                                    free_block(b);
+                                }
+                                delete scr;
+                            }
+                            if (s->penCanvas) SDL_DestroyTexture(s->penCanvas);
+                            delete s;
+                            ui->project->sprites.erase(ui->project->sprites.begin() + ui->selectedSpriteIndex);
+                            if (ui->selectedSpriteIndex >= (int)ui->project->sprites.size()) {
+                                ui->selectedSpriteIndex = ui->project->sprites.size() - 1;
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    } else if (e->type == SDL_MOUSEWHEEL) {
+        if (e->wheel.y != 0) {
+            ui->scrollOffset -= e->wheel.y * 20;
+            int maxOffset = (ui->project->sprites.size() * 70 + 10) - ui->rect.h;
+            if (maxOffset < 0) maxOffset = 0;
+            if (ui->scrollOffset < 0) ui->scrollOffset = 0;
+            if (ui->scrollOffset > maxOffset) ui->scrollOffset = maxOffset;
+        }
+    } else if (e->type == SDL_KEYDOWN && ui->editingName >= 0) {
+        if (e->key.keysym.sym == SDLK_RETURN) {
+            if (ui->editingName >= 0 && ui->editingName < (int)ui->project->sprites.size()) {
+                Sprite* s = ui->project->sprites[ui->editingName];
+                s->name = ui->nameEditBuffer;
+            }
+            ui->editingName = -1;
+            SDL_StopTextInput();
+        } else if (e->key.keysym.sym == SDLK_ESCAPE) {
+            ui->editingName = -1;
+            SDL_StopTextInput();
+        } else if (e->key.keysym.sym == SDLK_BACKSPACE) {
+            if (!ui->nameEditBuffer.empty()) {
+                ui->nameEditBuffer.pop_back();
+            }
+        }
+    } else if (e->type == SDL_TEXTINPUT && ui->editingName >= 0) {
+        ui->nameEditBuffer += e->text.text;
+    }
+}
+
+void SpriteManagerUI_uploadCostume(SpriteManagerUI* ui, const char* filepath) {
+    if (ui->selectedSpriteIndex < 0) {
+        printf("No sprite selected.\n");
+        return;
+    }
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        printf("File %s not found. Please place it in the program directory.\n", filepath);
+        return;
+    }
+    fclose(f);
+
+    char* fullPath = findFontFile(filepath);
+    Sprite* sprite = ui->project->sprites[ui->selectedSpriteIndex];
+    size_t oldCount = sprite->costumes.size();
+    Sprite_addCostumeFromFile(sprite, ui->renderer, fullPath);
+    if (sprite->costumes.size() > oldCount) {
+        if (sprite->costumes.back()->texture) {
+            sprite->currentCostume = sprite->costumes.size() - 1;
+            printf("New costume successfully added from %s and set as current.\n", fullPath);
+        } else {
+            printf("Error: texture is NULL after loading %s\n", fullPath);
+        }
+    } else {
+        printf("Error loading image from path: %s (costume count did not increase)\n", fullPath);
+    }
+    free(fullPath);
+}
