@@ -719,3 +719,327 @@ SDL_Scancode keyNameToScancode(const char* name) {
     if (n == "9") return SDL_SCANCODE_9;
     return SDL_SCANCODE_UNKNOWN;
 }
+// evaluateBlock function
+Value evaluateBlock(Block* b, ExecutionContext* ctx, Project* proj) {
+    switch (b->type) {
+        case BLOCK_NUMBER:
+            return make_number(b->numParam1);
+        case BLOCK_STRING:
+            return make_string(b->strParam);
+        case BLOCK_VARIABLE_GET:
+            return getVariable(proj, b->strParam);
+        case BLOCK_ADD: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            float result = value_to_number(left) + value_to_number(right);
+            return make_number(result);
+        }
+        case BLOCK_SUBTRACT: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            float result = value_to_number(left) - value_to_number(right);
+            return make_number(result);
+        }
+        case BLOCK_MULTIPLY: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            float result = value_to_number(left) * value_to_number(right);
+            return make_number(result);
+        }
+        case BLOCK_DIVIDE: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            float divisor = value_to_number(right);
+            if (divisor == 0) {
+                setError(gApp, "⚠️ تقسیم بر صفر!");
+                return make_number(0);
+            }
+            float result = value_to_number(left) / divisor;
+            return make_number(result);
+        }
+        case BLOCK_RANDOM: {
+            Value low = evaluateBlock(b->children[0], ctx, proj);
+            Value high = evaluateBlock(b->children[1], ctx, proj);
+            float l = value_to_number(low);
+            float h = value_to_number(high);
+            float r = l + (rand() / (float)RAND_MAX) * (h - l);
+            return make_number(r);
+        }
+        case BLOCK_LT: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            return make_number(value_to_number(left) < value_to_number(right) ? 1 : 0);
+        }
+        case BLOCK_GT: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            return make_number(value_to_number(left) > value_to_number(right) ? 1 : 0);
+        }
+        case BLOCK_EQUALS: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            if (left.type == Value::VAL_NUMBER && right.type == Value::VAL_NUMBER)
+                return make_number(left.num == right.num ? 1 : 0);
+            string s1 = value_to_string(left);
+            string s2 = value_to_string(right);
+            return make_number(s1 == s2 ? 1 : 0);
+        }
+        case BLOCK_AND: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            return make_number((value_to_number(left) != 0 && value_to_number(right) != 0) ? 1 : 0);
+        }
+        case BLOCK_OR: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            return make_number((value_to_number(left) != 0 || value_to_number(right) != 0) ? 1 : 0);
+        }
+        case BLOCK_NOT: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(value_to_number(val) == 0 ? 1 : 0);
+        }
+        case BLOCK_JOIN: {
+            Value left = evaluateBlock(b->children[0], ctx, proj);
+            Value right = evaluateBlock(b->children[1], ctx, proj);
+            string s1 = value_to_string(left);
+            string s2 = value_to_string(right);
+            return make_string(s1 + s2);
+        }
+        case BLOCK_LETTER_OF: {
+            Value strVal = evaluateBlock(b->children[0], ctx, proj);
+            Value idxVal = evaluateBlock(b->children[1], ctx, proj);
+            string s = value_to_string(strVal);
+            int idx = (int)value_to_number(idxVal);
+            if (idx >= 1 && idx <= (int)s.size()) {
+                return make_string(string(1, s[idx-1]));
+            }
+            return make_string("");
+        }
+        case BLOCK_LENGTH: {
+            Value strVal = evaluateBlock(b->children[0], ctx, proj);
+            string s = value_to_string(strVal);
+            return make_number((float)s.size());
+        }
+        case BLOCK_MOD: {
+            Value aVal = evaluateBlock(b->children[0], ctx, proj);
+            Value bVal = evaluateBlock(b->children[1], ctx, proj);
+            float a = value_to_number(aVal);
+            float b = value_to_number(bVal);
+            if (b == 0) {
+                setError(gApp, "⚠️ پیمانه با مقسوم‌علیه صفر.");
+                return make_number(0);
+            }
+            return make_number(fmod(a, b));
+        }
+        case BLOCK_ROUND: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(roundf(value_to_number(val)));
+        }
+        case BLOCK_ABS: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(fabs(value_to_number(val)));
+        }
+        case BLOCK_SQRT: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            float v = value_to_number(val);
+            if (v < 0) {
+                setError(gApp, "⚠️ جذر عدد منفی (%.2f) نامعتبر است.", v);
+                return make_number(0);
+            }
+            return make_number(sqrtf(v));
+        }
+        case BLOCK_SIN: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(sinf(value_to_number(val) * M_PI / 180.0f));
+        }
+        case BLOCK_COS: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(cosf(value_to_number(val) * M_PI / 180.0f));
+        }
+        case BLOCK_TAN: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(tanf(value_to_number(val) * M_PI / 180.0f));
+        }
+        case BLOCK_ASIN: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            float v = value_to_number(val);
+            if (v < -1 || v > 1) {
+                setError(gApp, "⚠️ آرکسینوس خارج از محدوده [-1,1] (%.2f) نامعتبر است.", v);
+                return make_number(0);
+            }
+            return make_number(asinf(v) * 180.0f / M_PI);
+        }
+        case BLOCK_ACOS: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            float v = value_to_number(val);
+            if (v < -1 || v > 1) {
+                setError(gApp, "⚠️ آرککسینوس خارج از محدوده [-1,1] (%.2f) نامعتبر است.", v);
+                return make_number(0);
+            }
+            return make_number(acosf(v) * 180.0f / M_PI);
+        }
+        case BLOCK_ATAN: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            return make_number(atanf(value_to_number(val)) * 180.0f / M_PI);
+        }
+        case BLOCK_LN: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            float v = value_to_number(val);
+            if (v <= 0) {
+                setError(gApp, "⚠️ لگاریتم طبیعی عدد غیرمثبت (%.2f) نامعتبر است.", v);
+                return make_number(0);
+            }
+            return make_number(logf(v));
+        }
+        case BLOCK_LOG: {
+            Value val = evaluateBlock(b->children[0], ctx, proj);
+            float v = value_to_number(val);
+            if (v <= 0) {
+                setError(gApp, "⚠️ لگاریتم عدد غیرمثبت (%.2f) نامعتبر است.", v);
+                return make_number(0);
+            }
+            return make_number(log10f(v));
+        }
+        case BLOCK_POW: {
+            Value base = evaluateBlock(b->children[0], ctx, proj);
+            Value exp = evaluateBlock(b->children[1], ctx, proj);
+            return make_number(powf(value_to_number(base), value_to_number(exp)));
+        }
+        case BLOCK_TOUCHING_EDGE: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            return make_number((s->x > 240 || s->x < -240 || s->y > 180 || s->y < -180) ? 1 : 0);
+        }
+        case BLOCK_MOUSE_X: {
+            int x, y;
+            SDL_GetMouseState(&x, &y);
+            SDL_Rect stageRect = {0, 40, 400, 600};
+            return make_number((float)(x - stageRect.w/2));
+        }
+        case BLOCK_MOUSE_Y: {
+            int x, y;
+            SDL_GetMouseState(&x, &y);
+            SDL_Rect stageRect = {0, 40, 400, 600};
+            return make_number((float)(stageRect.h/2 - y));
+        }
+        case BLOCK_KEY_PRESSED: {
+            const Uint8* state = SDL_GetKeyboardState(NULL);
+            SDL_Scancode sc = keyNameToScancode(b->strParam.c_str());
+            return make_number((sc != SDL_SCANCODE_UNKNOWN && state[sc]) ? 1 : 0);
+        }
+        case BLOCK_COSTUME_NUMBER: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            return make_number((float)(s->currentCostume + 1));
+        }
+        case BLOCK_COSTUME_NAME: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            if (s->currentCostume >= 0 && s->currentCostume < (int)s->costumes.size()) {
+                return make_string(s->costumes[s->currentCostume]->name);
+            }
+            return make_string("");
+        }
+        case BLOCK_BACKDROP_NUMBER: {
+            return make_number((float)(proj->currentBackdrop + 1));
+        }
+        case BLOCK_BACKDROP_NAME: {
+            if (proj->currentBackdrop >= 0 && proj->currentBackdrop < (int)proj->backdrops.size()) {
+                return make_string(proj->backdrops[proj->currentBackdrop]->name);
+            }
+            return make_string("");
+        }
+        case BLOCK_SIZE: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            return make_number(s->size);
+        }
+        case BLOCK_TOUCHING_MOUSEPOINTER: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            int mouseX, mouseY;
+            SDL_GetMouseState(&mouseX, &mouseY);
+            int winW, winH;
+            SDL_GetWindowSize(gWindow, &winW, &winH);
+            int paletteWidth = 200, codeWidth = 400;
+            int sceneWidth = winW - paletteWidth - codeWidth;
+            int bottomHeight = 128;
+            int rightPanelHeight = winH - 40 - bottomHeight;
+            int backdropPanelHeight = 150, soundPanelHeight = 150;
+            int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+            if (sceneHeight < 200) sceneHeight = 200;
+            SDL_Rect stageRect = {paletteWidth + codeWidth, 40, sceneWidth, sceneHeight};
+            float stageX = mouseX - (stageRect.x + stageRect.w/2);
+            float stageY = (stageRect.y + stageRect.h/2) - mouseY;
+            int spriteW = (int)(50 * s->size / 100.0f);
+            int spriteH = (int)(50 * s->size / 100.0f);
+            int touching = (stageX >= s->x - spriteW/2 && stageX <= s->x + spriteW/2 &&
+                            stageY >= s->y - spriteH/2 && stageY <= s->y + spriteH/2);
+            return make_number(touching ? 1 : 0);
+        }
+        case BLOCK_TOUCHING_SPRITE: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            string otherName = b->strParam;
+            if (otherName.empty()) return make_number(0);
+            for (size_t i = 0; i < proj->sprites.size(); i++) {
+                if ((int)i == ctx->spriteId) continue;
+                Sprite* other = proj->sprites[i];
+                if (other->name != otherName) continue;
+                if (!other->visible) continue;
+                int w1 = (int)(50 * s->size / 100.0f);
+                int h1 = (int)(50 * s->size / 100.0f);
+                int w2 = (int)(50 * other->size / 100.0f);
+                int h2 = (int)(50 * other->size / 100.0f);
+                if (abs(s->x - other->x) < (w1/2 + w2/2) && abs(s->y - other->y) < (h1/2 + h2/2)) {
+                    return make_number(1);
+                }
+                break;
+            }
+            return make_number(0);
+        }
+        case BLOCK_TOUCHING_COLOR:
+        case BLOCK_COLOR_TOUCHING_COLOR:
+            // فعلاً پیاده‌سازی نشده
+            return make_number(0);
+        case BLOCK_DISTANCE_TO: {
+            Sprite* s = proj->sprites[ctx->spriteId];
+            string target = b->strParam;
+            if (target.empty()) return make_number(0);
+            float dx = 0, dy = 0;
+            if (target == "mouse-pointer") {
+                int mouseX, mouseY;
+                SDL_GetMouseState(&mouseX, &mouseY);
+                int winW, winH;
+                SDL_GetWindowSize(gWindow, &winW, &winH);
+                int paletteWidth = 200, codeWidth = 400;
+                int sceneWidth = winW - paletteWidth - codeWidth;
+                int bottomHeight = 128;
+                int rightPanelHeight = winH - 40 - bottomHeight;
+                int backdropPanelHeight = 150, soundPanelHeight = 150;
+                int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+                if (sceneHeight < 200) sceneHeight = 200;
+                SDL_Rect stageRect = {paletteWidth + codeWidth, 40, sceneWidth, sceneHeight};
+                float stageX = mouseX - (stageRect.x + stageRect.w/2);
+                float stageY = (stageRect.y + stageRect.h/2) - mouseY;
+                dx = stageX - s->x;
+                dy = stageY - s->y;
+            } else {
+                for (size_t i = 0; i < proj->sprites.size(); i++) {
+                    if (proj->sprites[i]->name == target) {
+                        dx = proj->sprites[i]->x - s->x;
+                        dy = proj->sprites[i]->y - s->y;
+                        break;
+                    }
+                }
+            }
+            return make_number(sqrtf(dx*dx + dy*dy));
+        }
+        case BLOCK_ANSWER: {
+            return make_string(proj->answer);
+        }
+        case BLOCK_MOUSE_DOWN: {
+            Uint32 buttons = SDL_GetMouseState(NULL, NULL);
+            return make_number((buttons & SDL_BUTTON_LMASK) ? 1 : 0);
+        }
+        case BLOCK_TIMER: {
+            return make_number((SDL_GetTicks() - proj->timerStart) / 1000.0f);
+        }
+        default:
+            return make_number(0);
+    }
+}
