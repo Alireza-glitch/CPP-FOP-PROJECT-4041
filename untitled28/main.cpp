@@ -3672,4 +3672,337 @@ void PenToolUI_handleEvent(PenToolUI* ui, SDL_Event* e, Application* app) {
         }
     }
 }
+// BlockPaletteUI functions
+int motion_blocks[] = {
+        BLOCK_MOVE, BLOCK_TURN, BLOCK_GOTO, BLOCK_CHANGE_X, BLOCK_CHANGE_Y,
+        BLOCK_SET_DIRECTION,
+        BLOCK_GO_TO_RANDOM, BLOCK_GO_TO_MOUSE, BLOCK_IF_ON_EDGE_BOUNCE
+};
+int looks_blocks[] = {
+        BLOCK_SAY, BLOCK_THINK, BLOCK_SWITCH_COSTUME, BLOCK_NEXT_COSTUME,
+        BLOCK_SWITCH_BACKDROP, BLOCK_NEXT_BACKDROP, BLOCK_CHANGE_SIZE,
+        BLOCK_SET_SIZE, BLOCK_CHANGE_COLOR, BLOCK_SET_COLOR, BLOCK_CLEAR_EFFECTS,
+        BLOCK_SHOW, BLOCK_HIDE, BLOCK_GO_TO_LAYER, BLOCK_CHANGE_LAYER,
+        BLOCK_CHANGE_BRIGHTNESS, BLOCK_SET_BRIGHTNESS,
+        BLOCK_CHANGE_SATURATION, BLOCK_SET_SATURATION,
+        BLOCK_COSTUME_NUMBER, BLOCK_COSTUME_NAME,
+        BLOCK_BACKDROP_NUMBER, BLOCK_BACKDROP_NAME,
+        BLOCK_SIZE
+};
+int sound_blocks[] = {
+        BLOCK_PLAY_SOUND, BLOCK_PLAY_SOUND_UNTIL_DONE, BLOCK_STOP_ALL_SOUNDS,
+        BLOCK_CHANGE_VOLUME, BLOCK_SET_VOLUME
+};
+int events_blocks[] = {
+        BLOCK_WHEN_FLAG_CLICKED, BLOCK_WHEN_KEY_PRESSED, BLOCK_WHEN_SPRITE_CLICKED,
+        BLOCK_BROADCAST, BLOCK_BROADCAST_AND_WAIT, BLOCK_WHEN_I_RECEIVE
+};
+int control_blocks[] = {
+        BLOCK_WAIT, BLOCK_REPEAT, BLOCK_FOREVER, BLOCK_IF, BLOCK_IF_ELSE,
+        BLOCK_WAIT_UNTIL, BLOCK_REPEAT_UNTIL, BLOCK_STOP_ALL
+};
+int sensing_blocks[] = {
+        BLOCK_TOUCHING_EDGE,
+        BLOCK_MOUSE_X,
+        BLOCK_MOUSE_Y,
+        BLOCK_KEY_PRESSED,
+        BLOCK_TOUCHING_MOUSEPOINTER,
+        BLOCK_TOUCHING_SPRITE,
+        BLOCK_TOUCHING_COLOR,
+        BLOCK_COLOR_TOUCHING_COLOR,
+        BLOCK_DISTANCE_TO,
+        BLOCK_ASK_AND_WAIT,
+        BLOCK_ANSWER,
+        BLOCK_MOUSE_DOWN,
+        BLOCK_SET_DRAG_MODE,
+        BLOCK_TIMER,
+        BLOCK_RESET_TIMER
+};
+int operators_blocks[] = {
+        BLOCK_ADD, BLOCK_SUBTRACT, BLOCK_MULTIPLY, BLOCK_DIVIDE, BLOCK_RANDOM,
+        BLOCK_LT, BLOCK_GT, BLOCK_EQUALS, BLOCK_AND, BLOCK_OR, BLOCK_NOT,
+        BLOCK_JOIN, BLOCK_LETTER_OF, BLOCK_LENGTH, BLOCK_MOD, BLOCK_ROUND,
+        BLOCK_ABS, BLOCK_SQRT, BLOCK_SIN, BLOCK_COS, BLOCK_TAN, BLOCK_ASIN,
+        BLOCK_ACOS, BLOCK_ATAN, BLOCK_LN, BLOCK_LOG, BLOCK_POW
+};
+int variables_blocks[] = {
+        BLOCK_SET_VARIABLE, BLOCK_CHANGE_VARIABLE, BLOCK_VARIABLE_GET
+};
+int pen_blocks[] = {
+        BLOCK_PEN_DOWN,
+        BLOCK_PEN_UP,
+        BLOCK_SET_PEN_COLOR,
+        BLOCK_CHANGE_PEN_COLOR,
+        BLOCK_SET_PEN_BRIGHTNESS,
+        BLOCK_CHANGE_PEN_BRIGHTNESS,
+        BLOCK_SET_PEN_SATURATION,
+        BLOCK_CHANGE_PEN_SATURATION,
+        BLOCK_SET_PEN_SIZE,
+        BLOCK_CHANGE_PEN_SIZE,
+        BLOCK_ERASE_ALL,
+        BLOCK_STAMP
+};
+int num_pen_blocks = sizeof(pen_blocks)/sizeof(int);
 
+BlockPaletteUI* BlockPaletteUI_create(SDL_Renderer* ren, Project* proj, CodeAreaUI* codeArea) {
+    BlockPaletteUI* ui = new BlockPaletteUI;
+    ui->renderer = ren;
+    ui->project = proj;
+    ui->codeArea = codeArea;
+    ui->currentCategory = 0;
+    ui->blockScrollOffset = 0;
+    ui->rect = {0, 0, 0, 0};
+    ui->dragging = 0;
+    ui->dragBlockType = -1;
+    ui->dragStartX = ui->dragStartY = 0;
+    ui->dragOffsetX = ui->dragOffsetY = 0;
+    ui->previewX = ui->previewY = 0;
+    char* fontPath = findFontFile("arial.ttf");
+    ui->font = TTF_OpenFont(fontPath, 16);
+    free(fontPath);
+    if (!ui->font) {
+        printf("TTF_OpenFont error: could not find arial.ttf\n");
+    }
+    return ui;
+}
+
+void BlockPaletteUI_destroy(BlockPaletteUI* ui) {
+    if (ui->font) TTF_CloseFont(ui->font);
+    delete ui;
+}
+
+void BlockPaletteUI_render(BlockPaletteUI* ui) {
+    SDL_SetRenderDrawColor(ui->renderer, 230, 230, 230, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->rect);
+    SDL_SetRenderDrawColor(ui->renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->rect);
+
+    const char* categories[] = {"Motion", "Looks", "Sound", "Events", "Control", "Sensing", "Operators", "Variables", "Pen"};
+    int catCount = 9;
+    int catHeight = 18;
+
+    for (int i = 0; i < catCount; i++) {
+        int y = ui->rect.y + 10 + i * catHeight;
+        SDL_Rect catRect = {ui->rect.x + 10, y, 180, catHeight};
+        if (i == ui->currentCategory) {
+            SDL_SetRenderDrawColor(ui->renderer, 200, 200, 255, 255);
+        } else {
+            SDL_SetRenderDrawColor(ui->renderer, 210, 210, 210, 255);
+        }
+        SDL_RenderFillRect(ui->renderer, &catRect);
+        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(ui->renderer, &catRect);
+
+        if (ui->font) {
+            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, categories[i], {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                int textX = catRect.x + (catRect.w - surf->w) / 2;
+                int textY = catRect.y + (catRect.h - surf->h) / 2;
+                SDL_Rect textRect = {textX, textY, surf->w, surf->h};
+                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+    }
+
+    int* current_blocks = NULL;
+    int num_blocks = 0;
+    switch (ui->currentCategory) {
+        case 0: current_blocks = motion_blocks; num_blocks = sizeof(motion_blocks)/sizeof(int); break;
+        case 1: current_blocks = looks_blocks; num_blocks = sizeof(looks_blocks)/sizeof(int); break;
+        case 2: current_blocks = sound_blocks; num_blocks = sizeof(sound_blocks)/sizeof(int); break;
+        case 3: current_blocks = events_blocks; num_blocks = sizeof(events_blocks)/sizeof(int); break;
+        case 4: current_blocks = control_blocks; num_blocks = sizeof(control_blocks)/sizeof(int); break;
+        case 5: current_blocks = sensing_blocks; num_blocks = sizeof(sensing_blocks)/sizeof(int); break;
+        case 6: current_blocks = operators_blocks; num_blocks = sizeof(operators_blocks)/sizeof(int); break;
+        case 7: current_blocks = variables_blocks; num_blocks = sizeof(variables_blocks)/sizeof(int); break;
+        case 8: current_blocks = pen_blocks; num_blocks = num_pen_blocks; break;
+        default: return;
+    }
+
+    int blockStartY = ui->rect.y + 10 + catCount * catHeight + 10 - ui->blockScrollOffset;
+    int blockHeight = 30;
+    int blockGap = 2;
+
+    for (int i = 0; i < num_blocks; i++) {
+        int y = blockStartY + i * (blockHeight + blockGap);
+        if (y + blockHeight > ui->rect.y + ui->rect.h || y < ui->rect.y) {
+            continue;
+        }
+        int blockType = current_blocks[i];
+        SDL_Rect blockRect = {ui->rect.x + 10, y, 180, blockHeight};
+        SDL_Color color = get_block_color((BlockType)blockType);
+        DrawRoundedRect(ui->renderer, blockRect, 8, color);
+        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(ui->renderer, &blockRect);
+
+        if (ui->font) {
+            const char* text = block_type_names[blockType];
+            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, text, {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                SDL_Rect textRect = {blockRect.x + 5, blockRect.y + (blockHeight - surf->h)/2, surf->w, surf->h};
+                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+    }
+
+    if (ui->dragging && ui->dragBlockType >= 0) {
+        int blockWidth = 180;
+        int blockHeight = 30;
+        SDL_Rect previewRect = {
+                ui->previewX - ui->dragOffsetX,
+                ui->previewY - ui->dragOffsetY,
+                blockWidth,
+                blockHeight
+        };
+        SDL_Color color = get_block_color((BlockType)ui->dragBlockType);
+        SDL_SetRenderDrawBlendMode(ui->renderer, SDL_BLENDMODE_BLEND);
+        color.a = 128;
+        DrawRoundedRect(ui->renderer, previewRect, 8, color);
+        SDL_SetRenderDrawBlendMode(ui->renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(ui->renderer, &previewRect);
+        if (ui->font) {
+            const char* text = block_type_names[ui->dragBlockType];
+            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, text, {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                SDL_Rect textRect = {
+                        previewRect.x + 5,
+                        previewRect.y + (blockHeight - surf->h)/2,
+                        surf->w,
+                        surf->h
+                };
+                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+    }
+}
+
+void BlockPaletteUI_handleEvent(BlockPaletteUI* ui, SDL_Event* e) {
+    if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+        int x = e->button.x, y = e->button.y;
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            int catCount = 9;
+            int catHeight = 18;
+            int catIndex = (y - (ui->rect.y + 10)) / catHeight;
+            if (catIndex >= 0 && catIndex < catCount) {
+                int catY = ui->rect.y + 10 + catIndex * catHeight;
+                if (y >= catY && y <= catY + catHeight) {
+                    ui->currentCategory = catIndex;
+                    ui->blockScrollOffset = 0;
+                    return;
+                }
+            }
+
+            int* current_blocks = NULL;
+            int num_blocks = 0;
+            switch (ui->currentCategory) {
+                case 0: current_blocks = motion_blocks; num_blocks = sizeof(motion_blocks)/sizeof(int); break;
+                case 1: current_blocks = looks_blocks; num_blocks = sizeof(looks_blocks)/sizeof(int); break;
+                case 2: current_blocks = sound_blocks; num_blocks = sizeof(sound_blocks)/sizeof(int); break;
+                case 3: current_blocks = events_blocks; num_blocks = sizeof(events_blocks)/sizeof(int); break;
+                case 4: current_blocks = control_blocks; num_blocks = sizeof(control_blocks)/sizeof(int); break;
+                case 5: current_blocks = sensing_blocks; num_blocks = sizeof(sensing_blocks)/sizeof(int); break;
+                case 6: current_blocks = operators_blocks; num_blocks = sizeof(operators_blocks)/sizeof(int); break;
+                case 7: current_blocks = variables_blocks; num_blocks = sizeof(variables_blocks)/sizeof(int); break;
+                case 8: current_blocks = pen_blocks; num_blocks = num_pen_blocks; break;
+                default: return;
+            }
+            int blockStartY = ui->rect.y + 10 + catCount * catHeight + 10 - ui->blockScrollOffset;
+            int blockHeight = 30;
+            int blockIndex = (y - blockStartY) / (blockHeight + 2);
+            if (blockIndex >= 0 && blockIndex < num_blocks) {
+                int blockY = blockStartY + blockIndex * (blockHeight + 2);
+                if (y >= blockY && y <= blockY + blockHeight) {
+                    ui->dragging = 1;
+                    ui->dragBlockType = current_blocks[blockIndex];
+                    ui->dragOffsetX = x - (ui->rect.x + 10);
+                    ui->dragOffsetY = y - blockY;
+                    ui->previewX = x;
+                    ui->previewY = y;
+                    ui->dragStartX = x;
+                    ui->dragStartY = y;
+                }
+            }
+        }
+    } else if (e->type == SDL_MOUSEMOTION && ui->dragging) {
+        ui->previewX = e->motion.x;
+        ui->previewY = e->motion.y;
+    } else if (e->type == SDL_MOUSEBUTTONUP && e->button.button == SDL_BUTTON_LEFT && ui->dragging) {
+        int x = e->button.x, y = e->button.y;
+        if (ui->codeArea && x >= ui->codeArea->rect.x && x <= ui->codeArea->rect.x + ui->codeArea->rect.w &&
+            y >= ui->codeArea->rect.y && y <= ui->codeArea->rect.y + ui->codeArea->rect.h) {
+
+            int scriptIdx, blockIdx;
+            if (findBlockAt(ui->codeArea, x, y, &scriptIdx, &blockIdx)) {
+                Sprite* sprite = ui->codeArea->project->sprites[ui->codeArea->selectedSpriteIndex];
+                Block* parent = sprite->scripts[scriptIdx]->blocks[blockIdx];
+                if (parent->type == BLOCK_SET_VARIABLE || parent->type == BLOCK_CHANGE_VARIABLE ||
+                    parent->type == BLOCK_IF || parent->type == BLOCK_IF_ELSE ||
+                    parent->type == BLOCK_WAIT_UNTIL || parent->type == BLOCK_REPEAT_UNTIL ||
+                    (parent->type >= BLOCK_ADD && parent->type <= BLOCK_POW))
+                {
+                    Block* newBlock = new Block;
+                    newBlock->type = (BlockType)ui->dragBlockType;
+                    newBlock->numParam1 = 0;
+                    newBlock->numParam2 = 0;
+                    newBlock->intParam = 0;
+                    newBlock->bodyEnd = -1;
+                    newBlock->elseStart = -1;
+                    newBlock->strParam = "";
+                    if (!parent->children.empty()) {
+                        parent->children.clear();
+                    }
+                    parent->children.push_back(newBlock);
+                    preprocess_script(sprite->scripts[scriptIdx]);
+                    printf("Block added as child to parent type %d\n", parent->type);
+                } else {
+                    CodeAreaUI_addBlockAt(ui->codeArea, ui->dragBlockType, x, y);
+                }
+            } else {
+                CodeAreaUI_addBlockAt(ui->codeArea, ui->dragBlockType, x, y);
+            }
+        }
+        ui->dragging = 0;
+        ui->dragBlockType = -1;
+    } else if (e->type == SDL_MOUSEWHEEL) {
+        int x, y;
+        SDL_GetMouseState(&x, &y);
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            int catCount = 9;
+            int catHeight = 18;
+            int blockAreaTop = ui->rect.y + 10 + catCount * catHeight + 10;
+            if (y >= blockAreaTop) {
+                int num_blocks = 0;
+                switch (ui->currentCategory) {
+                    case 0: num_blocks = sizeof(motion_blocks)/sizeof(int); break;
+                    case 1: num_blocks = sizeof(looks_blocks)/sizeof(int); break;
+                    case 2: num_blocks = sizeof(sound_blocks)/sizeof(int); break;
+                    case 3: num_blocks = sizeof(events_blocks)/sizeof(int); break;
+                    case 4: num_blocks = sizeof(control_blocks)/sizeof(int); break;
+                    case 5: num_blocks = sizeof(sensing_blocks)/sizeof(int); break;
+                    case 6: num_blocks = sizeof(operators_blocks)/sizeof(int); break;
+                    case 7: num_blocks = sizeof(variables_blocks)/sizeof(int); break;
+                    case 8: num_blocks = num_pen_blocks; break;
+                }
+                ui->blockScrollOffset -= e->wheel.y * 20;
+                int visibleBlockHeight = ui->rect.y + ui->rect.h - blockAreaTop;
+                int totalBlockHeight = num_blocks * (30 + 2);
+                int maxBlockOffset = totalBlockHeight - visibleBlockHeight;
+                if (maxBlockOffset < 0) maxBlockOffset = 0;
+                if (ui->blockScrollOffset < 0) ui->blockScrollOffset = 0;
+                if (ui->blockScrollOffset > maxBlockOffset) ui->blockScrollOffset = maxBlockOffset;
+            }
+        }
+    }
+}
