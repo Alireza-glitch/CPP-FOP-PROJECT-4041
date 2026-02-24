@@ -208,4 +208,225 @@ enum BlockType {
     BLOCK_ENDIF,
     BLOCK_ENDLOOP
 };
+struct Block {
+    BlockType type;
+    float numParam1;
+    float numParam2;
+    int intParam;
+    string strParam;
+    vector<Block*> children;
+    int bodyEnd;
+    int elseStart;
+};
 
+struct Script {
+    vector<Block*> blocks;
+};
+
+struct Costume {
+    string name;
+    SDL_Texture* texture;
+};
+
+struct Sprite {
+    string name;
+    float x;
+    float y;
+    float direction;
+    float size;
+    int visible;
+    int currentCostume;
+    int layer;
+    bool draggable;
+    vector<Costume*> costumes;
+    vector<Script*> scripts;
+    bool penDown;
+    float penHue;
+    float penSaturation;
+    float penBrightness;
+    int penSize;
+    SDL_Texture* penCanvas;
+    string sayText;
+    string thinkText;
+    Uint32 sayUntil;
+    Uint32 thinkUntil;
+    float colorEffect;
+    float brightnessEffect;
+    float saturationEffect;
+};
+
+struct Backdrop {
+    string name;
+    SDL_Texture* texture;
+};
+
+struct Sound {
+    string name;
+    float volume;
+    int muted;
+    Mix_Chunk* chunk;
+};
+
+struct Variable {
+    string name;
+    Value value;
+};
+
+struct Project {
+    vector<Sprite*> sprites;
+    vector<Backdrop*> backdrops;
+    vector<Sound*> sounds;
+    vector<Variable*> globalVariables;
+    int currentBackdrop;
+    string answer;
+    Uint32 timerStart;
+};
+
+struct ExecutionContext {
+    int spriteId;
+    int scriptId;
+    int pc;
+    Uint32 waitUntil;
+    vector<LoopInfo> loopStack;
+    vector<IfInfo> ifStack;
+    vector<int> callStack;
+    int repeatCount;
+    int ifElseBranch;
+    int waitingForSoundChannel;
+    bool waitingForAnswer;
+    ExecutionContext* parent;
+    int childrenLeft;
+    bool waitingForChildren;
+};
+
+struct ExecutionEngine {
+    Project* project;
+    vector<ExecutionContext*> contexts;
+    bool stepMode;
+};
+
+struct Application {
+    SDL_Window* window;
+    SDL_Renderer* renderer;
+    bool running;
+    bool paused;
+    bool executing;
+    Project* currentProject;
+    ExecutionEngine* engine;
+    SpriteManagerUI* spriteManagerUI;
+    BackdropManagerUI* backdropManagerUI;
+    SoundManagerUI* soundManagerUI;
+    PenToolUI* penToolUI;
+    BlockPaletteUI* blockPalette;
+    CodeAreaUI* codeArea;
+    TTF_Font* speechFont;
+    SDL_Rect menuRect;
+    SDL_Rect varPanelRect;
+    SDL_Rect paletteRect;
+    SDL_Rect codeRect;
+    SDL_Rect sceneRect;
+    SDL_Rect spritePanelRect;
+    SDL_Rect penPanelRect;
+    SDL_Rect backdropPanelRect;
+    SDL_Rect soundPanelRect;
+    int dragSpriteIndex;
+    int dragStartX, dragStartY;
+    float dragSpriteOrigX, dragSpriteOrigY;
+    bool answerReady;
+    char pendingAnswer[256];
+    char textInputBuffer[256];
+    char lastError[256];
+    Uint32 errorTime;
+};
+
+struct SpriteManagerUI {
+    SDL_Renderer* renderer;
+    Project* project;
+    int selectedSpriteIndex;
+    int scrollOffset;
+    SDL_Rect rect;
+    TTF_Font* font;
+    int editingName;
+    string nameEditBuffer;
+    int editingField;
+    int editingSpriteIndex;
+    string editBuffer;
+    Uint32 lastClickTime;
+    int lastClickedIndex;
+};
+
+struct BackdropManagerUI {
+    SDL_Renderer* renderer;
+    Project* project;
+    int selectedBackdropIndex;
+    int scrollOffset;
+    SDL_Rect rect;
+    TTF_Font* font;
+};
+
+struct SoundManagerUI {
+    SDL_Renderer* renderer;
+    Project* project;
+    int selectedSoundIndex;
+    int scrollOffset;
+    SDL_Rect rect;
+    TTF_Font* font;
+};
+
+struct PenToolUI {
+    SDL_Renderer* renderer;
+    Project* project;
+    SDL_Rect rect;
+    TTF_Font* font;
+    bool active;
+    bool drawing;
+    int lastMouseX, lastMouseY;
+    SDL_Rect colorPreview;
+    SDL_Rect hueSlider;
+    SDL_Rect satSlider;
+    SDL_Rect brightSlider;
+    SDL_Rect sizeSlider;
+    float hue;
+    float saturation;
+    float brightness;
+    int penSize;
+    bool draggingHue;
+    bool draggingSat;
+    bool draggingBright;
+    bool draggingSize;
+};
+
+struct BlockPaletteUI {
+    SDL_Renderer* renderer;
+    Project* project;
+    CodeAreaUI* codeArea;
+    int currentCategory;
+    int blockScrollOffset;
+    SDL_Rect rect;
+    int dragging;
+    int dragBlockType;
+    int dragStartX;
+    int dragStartY;
+    int dragOffsetX;
+    int dragOffsetY;
+    int previewX;
+    int previewY;
+    TTF_Font* font;
+};
+
+struct CodeAreaUI {
+    SDL_Renderer* renderer;
+    Project* project;
+    ExecutionEngine* engine;
+    int selectedSpriteIndex;
+    int selectedScriptIndex;
+    int selectedBlockIndex;
+    int scrollX;
+    int scrollY;
+    SDL_Rect rect;
+    int editingScript;
+    int editingBlock;
+    int editingParam;
+    string editBuffer;
+    TTF_Font* font;
+};
