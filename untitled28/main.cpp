@@ -25,4 +25,8 @@ using namespace std;
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+#define MAX_STEPS_PER_FRAME 10000
+#define SPRITE_EDIT_WIDTH 180
+#define SPRITE_EDIT_HEIGHT 120
+
 
