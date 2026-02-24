@@ -1043,3 +1043,57 @@ Value evaluateBlock(Block* b, ExecutionContext* ctx, Project* proj) {
             return make_number(0);
     }
 }
+// Utility functions
+SDL_Color hslToRgb(float h, float s, float l) {
+    float hue = h * 360.0f / 200.0f;
+    float saturation = s / 100.0f;
+    float lightness = l / 100.0f;
+    float c = (1 - fabs(2 * lightness - 1)) * saturation;
+    float x = c * (1 - fabs(fmod(hue / 60.0f, 2) - 1));
+    float m = lightness - c/2;
+    float r, g, b;
+    if (hue < 60) { r = c; g = x; b = 0; }
+    else if (hue < 120) { r = x; g = c; b = 0; }
+    else if (hue < 180) { r = 0; g = c; b = x; }
+    else if (hue < 240) { r = 0; g = x; b = c; }
+    else if (hue < 300) { r = x; g = 0; b = c; }
+    else { r = c; g = 0; b = x; }
+    return {(Uint8)((r + m)*255), (Uint8)((g + m)*255), (Uint8)((b + m)*255), 255};
+}
+
+void drawLineOnCanvas(SDL_Renderer* renderer, SDL_Texture* canvas, int x1, int y1, int x2, int y2, SDL_Color color, int size) {
+    SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
+    SDL_SetRenderTarget(renderer, canvas);
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    SDL_RenderDrawLine(renderer, x1, y1, x2, y2);
+    SDL_SetRenderTarget(renderer, oldTarget);
+}
+
+void Application_createPenCanvasForSprite(Application* app, Sprite* sprite) {
+    int winW, winH;
+    SDL_GetWindowSize(app->window, &winW, &winH);
+    if (sprite->penCanvas) SDL_DestroyTexture(sprite->penCanvas);
+    sprite->penCanvas = SDL_CreateTexture(app->renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, winW, winH);
+    SDL_SetTextureBlendMode(sprite->penCanvas, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderTarget(app->renderer, sprite->penCanvas);
+    SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 0);
+    SDL_RenderClear(app->renderer);
+    SDL_SetRenderTarget(app->renderer, NULL);
+}
+
+int compareSpritesByLayer(const void* a, const void* b) {
+    Sprite* sa = *(Sprite**)a;
+    Sprite* sb = *(Sprite**)b;
+    return sa->layer - sb->layer;
+}
+
+int main(int argc, char* argv[]) {
+    Application app;
+    gApp = &app;
+    if (!Application_init(&app)) {
+        return 1;
+    }
+    Application_run(&app);
+    Application_shutdown(&app);
+    return 0;
+}
