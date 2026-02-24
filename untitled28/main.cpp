@@ -430,3 +430,86 @@ struct CodeAreaUI {
     string editBuffer;
     TTF_Font* font;
 };
+// Function declarations
+void free_block(Block* b);
+bool Application_init(Application* app);
+void Application_run(Application* app);
+void Application_handleEvents(Application* app);
+void Application_update(Application* app);
+void Application_render(Application* app);
+void Application_shutdown(Application* app);
+Project* Project_create();
+void Project_destroy(Project* proj);
+bool Project_save(Project* proj, const char* filename);
+bool Project_load(Project* proj, const char* filename);
+void Project_addDefaultSprite(Project* proj, const char* name);
+void Project_addDefaultBackdrop(Project* proj, const char* name);
+void Project_addDefaultSound(Project* proj, const char* name);
+void Project_addSoundFromFile(Project* proj, const char* name, const char* filepath);
+void Sprite_addDefaultCostume(Sprite* sprite, const char* name);
+void Sprite_addCostumeFromFile(Sprite* sprite, SDL_Renderer* renderer, const char* filepath);
+ExecutionEngine* ExecutionEngine_create(Project* proj);
+void ExecutionEngine_destroy(ExecutionEngine* eng);
+void ExecutionEngine_step(ExecutionEngine* eng, Uint32 currentTime);
+void ExecutionEngine_run(ExecutionEngine* eng);
+void ExecutionEngine_stop(ExecutionEngine* eng);
+void ExecutionEngine_addContext(ExecutionEngine* eng, int spriteId, int scriptId);
+void ExecutionEngine_addChildContext(ExecutionEngine* eng, int spriteId, int scriptId, ExecutionContext* parent);
+void ExecutionEngine_removeContext(ExecutionEngine* eng, int index);
+void ExecutionEngine_startKeyScripts(ExecutionEngine* eng, SDL_Keycode key);
+int ExecutionEngine_startSpriteClickScripts(ExecutionEngine* eng, int mouseX, int mouseY, SDL_Rect stageRect);
+SpriteManagerUI* SpriteManagerUI_create(SDL_Renderer* ren, Project* proj);
+void SpriteManagerUI_destroy(SpriteManagerUI* ui);
+void SpriteManagerUI_render(SpriteManagerUI* ui);
+void SpriteManagerUI_handleEvent(SpriteManagerUI* ui, SDL_Event* e);
+void SpriteManagerUI_uploadCostume(SpriteManagerUI* ui, const char* filepath);
+BackdropManagerUI* BackdropManagerUI_create(SDL_Renderer* ren, Project* proj);
+void BackdropManagerUI_destroy(BackdropManagerUI* ui);
+void BackdropManagerUI_render(BackdropManagerUI* ui);
+void BackdropManagerUI_handleEvent(BackdropManagerUI* ui, SDL_Event* e);
+void BackdropManagerUI_uploadBackdrop(BackdropManagerUI* ui, const char* filepath);
+SoundManagerUI* SoundManagerUI_create(SDL_Renderer* ren, Project* proj);
+void SoundManagerUI_destroy(SoundManagerUI* ui);
+void SoundManagerUI_render(SoundManagerUI* ui);
+void SoundManagerUI_handleEvent(SoundManagerUI* ui, SDL_Event* e);
+void SoundManagerUI_uploadSound(SoundManagerUI* ui, const char* filepath);
+PenToolUI* PenToolUI_create(SDL_Renderer* ren, Project* proj);
+void PenToolUI_destroy(PenToolUI* ui);
+void PenToolUI_render(PenToolUI* ui);
+void PenToolUI_handleEvent(PenToolUI* ui, SDL_Event* e, Application* app);
+BlockPaletteUI* BlockPaletteUI_create(SDL_Renderer* ren, Project* proj, CodeAreaUI* codeArea);
+void BlockPaletteUI_destroy(BlockPaletteUI* ui);
+void BlockPaletteUI_render(BlockPaletteUI* ui);
+void BlockPaletteUI_handleEvent(BlockPaletteUI* ui, SDL_Event* e);
+CodeAreaUI* CodeAreaUI_create(SDL_Renderer* ren, Project* proj, ExecutionEngine* engine);
+void CodeAreaUI_destroy(CodeAreaUI* ui);
+void CodeAreaUI_render(CodeAreaUI* ui);
+void CodeAreaUI_handleEvent(CodeAreaUI* ui, SDL_Event* e);
+void CodeAreaUI_addBlockAt(CodeAreaUI* ui, int blockType, int screenX, int screenY);
+void Application_createPenCanvasForSprite(Application* app, Sprite* sprite);
+SDL_Color hslToRgb(float h, float s, float l);
+void drawLineOnCanvas(SDL_Renderer* renderer, SDL_Texture* canvas, int x1, int y1, int x2, int y2, SDL_Color color, int size);
+int compareSpritesByLayer(const void* a, const void* b);
+void preprocess_script(Script* script);
+SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path);
+int findSoundByName(Project* proj, const char* name);
+Variable* findVariable(Project* proj, const string& name);
+void setVariable(Project* proj, const string& name, const Value& val);
+Value getVariable(Project* proj, const string& name);
+Value evaluateBlock(Block* b, ExecutionContext* ctx, Project* proj);
+SDL_Scancode keyNameToScancode(const char* name);
+bool findBlockAt(CodeAreaUI* ui, int mouseX, int mouseY, int* outScriptIndex, int* outBlockIndex);
+
+void setError(Application* app, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsnprintf(app->lastError, sizeof(app->lastError), format, args);
+    va_end(args);
+    app->errorTime = SDL_GetTicks();
+    printf("Error: %s\n", app->lastError);
+}
+
+void clearError(Application* app) {
+    app->lastError[0] = '\0';
+    app->errorTime = 0;
+}
