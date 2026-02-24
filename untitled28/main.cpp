@@ -4459,3 +4459,313 @@ void CodeAreaUI_addBlockAt(CodeAreaUI* ui, int blockType, int screenX, int scree
 
     preprocess_script(script);
 };
+// Project management functions
+Project* Project_create() {
+    Project* proj = new Project;
+    proj->currentBackdrop = -1;
+    proj->timerStart = SDL_GetTicks();
+    return proj;
+}
+
+void Project_destroy(Project* proj) {
+    for (Sprite* s : proj->sprites) {
+        for (Costume* c : s->costumes) {
+            if (c->texture) SDL_DestroyTexture(c->texture);
+            delete c;
+        }
+        for (Script* scr : s->scripts) {
+            for (Block* b : scr->blocks) {
+                free_block(b);
+            }
+            delete scr;
+        }
+        if (s->penCanvas) SDL_DestroyTexture(s->penCanvas);
+        delete s;
+    }
+    for (Backdrop* b : proj->backdrops) {
+        if (b->texture) SDL_DestroyTexture(b->texture);
+        delete b;
+    }
+    for (Sound* s : proj->sounds) {
+        if (s->chunk) Mix_FreeChunk(s->chunk);
+        delete s;
+    }
+    for (Variable* v : proj->globalVariables) {
+        delete v;
+    }
+    delete proj;
+}
+
+bool Project_save(Project* proj, const char* filename) {
+    FILE* f = fopen(filename, "w");
+    if (!f) return false;
+    for (size_t i = 0; i < proj->sprites.size(); i++) {
+        Sprite* s = proj->sprites[i];
+        fprintf(f, "sprite,%s,%f,%f,%f,%f,%d,%d,%d,%d,%f,%f,%f,%d,%f,%f,%f,%d\n",
+                s->name.c_str(), s->x, s->y, s->direction, s->size,
+                s->visible, s->layer, s->currentCostume,
+                s->penDown, s->penHue, s->penSaturation, s->penBrightness, s->penSize,
+                s->colorEffect, s->brightnessEffect, s->saturationEffect,
+                s->draggable);
+        for (size_t j = 0; j < s->costumes.size(); j++) {
+            fprintf(f, "costume,%s,%s\n", s->name.c_str(), s->costumes[j]->name.c_str());
+        }
+        for (size_t j = 0; j < s->scripts.size(); j++) {
+            Script* scr = s->scripts[j];
+            for (size_t k = 0; k < scr->blocks.size(); k++) {
+                Block* b = scr->blocks[k];
+                fprintf(f, "script,%s,%zu,%d,%f,%f,%d,%s\n",
+                        s->name.c_str(), j, b->type, b->numParam1, b->numParam2,
+                        b->intParam, b->strParam.c_str());
+            }
+        }
+    }
+    for (size_t i = 0; i < proj->globalVariables.size(); i++) {
+        Variable* v = proj->globalVariables[i];
+        if (v->value.type == Value::VAL_NUMBER) {
+            fprintf(f, "variable_num,%s,%f\n", v->name.c_str(), v->value.num);
+        } else {
+            fprintf(f, "variable_str,%s,%s\n", v->name.c_str(), v->value.str.c_str());
+        }
+    }
+    for (size_t i = 0; i < proj->sounds.size(); i++) {
+        Sound* s = proj->sounds[i];
+        fprintf(f, "sound,%s,%f,%d\n", s->name.c_str(), s->volume, s->muted);
+    }
+    fclose(f);
+    return true;
+}
+
+bool Project_load(Project* proj, const char* filename) {
+    FILE* f = fopen(filename, "r");
+    if (!f) return false;
+    Project_destroy(proj);
+    proj = Project_create();
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = 0;
+        char* token = strtok(line, ",");
+        if (!token) continue;
+        if (strcmp(token, "sprite") == 0) {
+            char* name = strtok(NULL, ",");
+            float x = atof(strtok(NULL, ","));
+            float y = atof(strtok(NULL, ","));
+            float dir = atof(strtok(NULL, ","));
+            float size = atof(strtok(NULL, ","));
+            int visible = atoi(strtok(NULL, ","));
+            int layer = atoi(strtok(NULL, ","));
+            int currCostume = atoi(strtok(NULL, ","));
+            int penDown = atoi(strtok(NULL, ","));
+            float penHue = atof(strtok(NULL, ","));
+            float penSat = atof(strtok(NULL, ","));
+            float penBright = atof(strtok(NULL, ","));
+            int penSize = atoi(strtok(NULL, ","));
+            float colorEffect = atof(strtok(NULL, ","));
+            float brightnessEffect = atof(strtok(NULL, ","));
+            float saturationEffect = atof(strtok(NULL, ","));
+            int draggable = atoi(strtok(NULL, ","));
+            Sprite* s = new Sprite;
+            s->name = name;
+            s->x = x; s->y = y; s->direction = dir; s->size = size;
+            s->visible = visible; s->layer = layer; s->currentCostume = currCostume;
+            s->draggable = draggable; s->penDown = penDown; s->penHue = penHue;
+            s->penSaturation = penSat; s->penBrightness = penBright; s->penSize = penSize;
+            s->penCanvas = NULL; s->colorEffect = colorEffect;
+            s->brightnessEffect = brightnessEffect; s->saturationEffect = saturationEffect;
+            proj->sprites.push_back(s);
+        } else if (strcmp(token, "costume") == 0) {
+            char* spriteName = strtok(NULL, ",");
+            char* costumeName = strtok(NULL, ",");
+            for (Sprite* s : proj->sprites) {
+                if (s->name == spriteName) {
+                    Sprite_addDefaultCostume(s, costumeName);
+                    break;
+                }
+            }
+        } else if (strcmp(token, "script") == 0) {
+            char* spriteName = strtok(NULL, ",");
+            int scriptIdx = atoi(strtok(NULL, ","));
+            int blockType = atoi(strtok(NULL, ","));
+            float num1 = atof(strtok(NULL, ","));
+            float num2 = atof(strtok(NULL, ","));
+            int intParam = atoi(strtok(NULL, ","));
+            char* strParam = strtok(NULL, ",");
+            Sprite* s = nullptr;
+            for (Sprite* sp : proj->sprites) if (sp->name == spriteName) { s = sp; break; }
+            if (!s) continue;
+            while ((int)s->scripts.size() <= scriptIdx) s->scripts.push_back(new Script);
+            Script* scr = s->scripts[scriptIdx];
+            Block* b = new Block;
+            b->type = (BlockType)blockType;
+            b->numParam1 = num1; b->numParam2 = num2; b->intParam = intParam;
+            if (strParam) b->strParam = strParam;
+            b->bodyEnd = -1; b->elseStart = -1;
+            scr->blocks.push_back(b);
+        } else if (strcmp(token, "variable_num") == 0) {
+            char* varName = strtok(NULL, ",");
+            char* varValue = strtok(NULL, ",");
+            if (varName && varValue) {
+                Value val = make_number((float)atof(varValue));
+                setVariable(proj, varName, val);
+            }
+        } else if (strcmp(token, "variable_str") == 0) {
+            char* varName = strtok(NULL, ",");
+            char* varValue = strtok(NULL, ",");
+            if (varName && varValue) {
+                Value val = make_string(varValue);
+                setVariable(proj, varName, val);
+            }
+        } else if (strcmp(token, "sound") == 0) {
+            char* name = strtok(NULL, ",");
+            float vol = atof(strtok(NULL, ","));
+            int muted = atoi(strtok(NULL, ","));
+            string filepath = string(name) + ".wav";
+            Project_addSoundFromFile(proj, name, filepath.c_str());
+            if (!proj->sounds.empty()) {
+                Sound* snd = proj->sounds.back();
+                snd->volume = vol; snd->muted = muted; snd->name = name;
+            }
+        }
+    }
+    fclose(f);
+    for (Sprite* s : proj->sprites) {
+        for (Script* scr : s->scripts) {
+            preprocess_script(scr);
+        }
+    }
+    return true;
+}
+
+void Project_addDefaultSprite(Project* proj, const char* name) {
+    Sprite* s = new Sprite;
+    s->name = name; s->x = 0; s->y = 0; s->direction = 90; s->size = 100;
+    s->visible = 1; s->layer = 0; s->currentCostume = 0; s->draggable = true;
+    s->penDown = false; s->penHue = 0; s->penSaturation = 100; s->penBrightness = 100; s->penSize = 1;
+    s->penCanvas = NULL; s->colorEffect = 0; s->brightnessEffect = 100; s->saturationEffect = 100;
+    Sprite_addDefaultCostume(s, "costume1");
+    Script* script = new Script;
+    Block* block = new Block; block->type = BLOCK_WHEN_FLAG_CLICKED; block->numParam1 = 0; block->bodyEnd = -1;
+    Block* showBlock = new Block; showBlock->type = BLOCK_SHOW; showBlock->numParam1 = 0; showBlock->bodyEnd = -1;
+    script->blocks.push_back(block); script->blocks.push_back(showBlock);
+    s->scripts.push_back(script);
+    proj->sprites.push_back(s);
+}
+
+void Project_addDefaultBackdrop(Project* proj, const char* name) {
+    Backdrop* b = new Backdrop; b->name = name; b->texture = NULL;
+    proj->backdrops.push_back(b);
+    if (proj->currentBackdrop == -1) proj->currentBackdrop = 0;
+}
+
+void Project_addDefaultSound(Project* proj, const char* name) {
+    Sound* s = new Sound; s->name = name; s->volume = 100; s->muted = 0;
+    char* soundPath = findFontFile("beep.wav");
+    if (soundPath) {
+        s->chunk = Mix_LoadWAV(soundPath); free(soundPath);
+        if (!s->chunk) printf("Failed to load beep.wav! %s\n", Mix_GetError());
+    } else s->chunk = NULL;
+    proj->sounds.push_back(s);
+}
+
+void Project_addSoundFromFile(Project* proj, const char* name, const char* filepath) {
+    Sound* s = new Sound; s->name = name; s->volume = 100; s->muted = 0;
+    char* fullPath = findFontFile(filepath);
+    if (fullPath) {
+        s->chunk = Mix_LoadWAV(fullPath); free(fullPath);
+        if (!s->chunk) printf("Failed to load sound %s! %s\n", filepath, Mix_GetError());
+    } else s->chunk = NULL;
+    proj->sounds.push_back(s);
+}
+
+void Sprite_addDefaultCostume(Sprite* sprite, const char* name) {
+    Costume* c = new Costume; c->name = name; c->texture = NULL;
+    sprite->costumes.push_back(c);
+}
+
+void Sprite_addCostumeFromFile(Sprite* sprite, SDL_Renderer* renderer, const char* filepath) {
+    SDL_Texture* tex = loadTexture(renderer, filepath);
+    if (!tex) return;
+    Costume* c = new Costume; c->name = filepath; c->texture = tex;
+    sprite->costumes.push_back(c);
+}
+
+ExecutionEngine* ExecutionEngine_create(Project* proj) {
+    ExecutionEngine* eng = new ExecutionEngine; eng->project = proj; eng->stepMode = false;
+    return eng;
+}
+
+void ExecutionEngine_destroy(ExecutionEngine* eng) {
+    for (ExecutionContext* ctx : eng->contexts) delete ctx;
+    delete eng;
+}
+
+void ExecutionEngine_addContext(ExecutionEngine* eng, int spriteId, int scriptId) {
+    ExecutionContext* ctx = new ExecutionContext;
+    ctx->spriteId = spriteId; ctx->scriptId = scriptId; ctx->pc = 0; ctx->waitUntil = 0;
+    ctx->repeatCount = 0; ctx->ifElseBranch = 0; ctx->waitingForSoundChannel = -1;
+    ctx->waitingForAnswer = false; ctx->parent = NULL; ctx->childrenLeft = 0; ctx->waitingForChildren = false;
+    eng->contexts.push_back(ctx);
+}
+
+void ExecutionEngine_addChildContext(ExecutionEngine* eng, int spriteId, int scriptId, ExecutionContext* parent) {
+    ExecutionEngine_addContext(eng, spriteId, scriptId);
+    ExecutionContext* child = eng->contexts.back(); child->parent = parent;
+    if (parent) parent->childrenLeft++;
+}
+
+void ExecutionEngine_removeContext(ExecutionEngine* eng, int index) {
+    if (index < 0 || index >= (int)eng->contexts.size()) return;
+    ExecutionContext* ctx = eng->contexts[index];
+    if (ctx->parent) {
+        ctx->parent->childrenLeft--;
+        if (ctx->parent->waitingForChildren && ctx->parent->childrenLeft == 0) {
+            ctx->parent->pc++; ctx->parent->waitingForChildren = false;
+        }
+    }
+    delete ctx; eng->contexts.erase(eng->contexts.begin() + index);
+}
+
+void Application_shutdown(Application* app) {
+    if (app->speechFont) TTF_CloseFont(app->speechFont);
+    if (app->codeArea) CodeAreaUI_destroy(app->codeArea);
+    if (app->blockPalette) BlockPaletteUI_destroy(app->blockPalette);
+    if (app->backdropManagerUI) BackdropManagerUI_destroy(app->backdropManagerUI);
+    if (app->soundManagerUI) SoundManagerUI_destroy(app->soundManagerUI);
+    if (app->penToolUI) PenToolUI_destroy(app->penToolUI);
+    if (app->spriteManagerUI) SpriteManagerUI_destroy(app->spriteManagerUI);
+    if (app->engine) ExecutionEngine_destroy(app->engine);
+    if (app->currentProject) Project_destroy(app->currentProject);
+    if (app->renderer) SDL_DestroyRenderer(app->renderer);
+    if (app->window) SDL_DestroyWindow(app->window);
+    Mix_CloseAudio(); IMG_Quit(); TTF_Quit(); SDL_Quit();
+}
+
+void free_block(Block* b) {
+    if (!b) return;
+    for (Block* child : b->children) free_block(child);
+    delete b;
+}
+
+void preprocess_script(Script* script) {
+    vector<int> stack;
+    for (size_t i = 0; i < script->blocks.size(); i++) {
+        Block* b = script->blocks[i];
+        b->bodyEnd = -1; b->elseStart = -1;
+        switch (b->type) {
+            case BLOCK_IF: case BLOCK_IF_ELSE: case BLOCK_REPEAT: case BLOCK_FOREVER: case BLOCK_REPEAT_UNTIL:
+                stack.push_back(i); break;
+            case BLOCK_ELSE:
+                if (!stack.empty()) {
+                    int ifIndex = stack.back();
+                    if (script->blocks[ifIndex]->type == BLOCK_IF_ELSE)
+                        script->blocks[ifIndex]->elseStart = i + 1;
+                } break;
+            case BLOCK_ENDIF: case BLOCK_ENDLOOP:
+                if (!stack.empty()) {
+                    int startIndex = stack.back(); stack.pop_back();
+                    script->blocks[startIndex]->bodyEnd = i + 1;
+                } break;
+            default: break;
+        }
+    }
+}
