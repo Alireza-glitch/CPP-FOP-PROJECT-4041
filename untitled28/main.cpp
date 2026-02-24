@@ -1097,3 +1097,602 @@ int main(int argc, char* argv[]) {
     Application_shutdown(&app);
     return 0;
 }
+// Application functions
+bool Application_init(Application* app) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) return false;
+    if (TTF_Init() == -1) return false;
+    int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG | IMG_INIT_TIF;
+    if (!(IMG_Init(imgFlags) & imgFlags)) {
+        printf("SDL_image could not initialize! %s\n", IMG_GetError());
+        return false;
+    }
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+        printf("SDL_mixer could not initialize! %s\n", Mix_GetError());
+        return false;
+    }
+    app->window = SDL_CreateWindow("Scratch-like IDE",
+                                   SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                   0, 0,
+                                   SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP);
+    if (!app->window) return false;
+    app->renderer = SDL_CreateRenderer(app->window, -1, SDL_RENDERER_ACCELERATED);
+    if (!app->renderer) return false;
+
+    gWindow = app->window;
+
+    app->currentProject = Project_create();
+    app->engine = ExecutionEngine_create(app->currentProject);
+    app->spriteManagerUI = SpriteManagerUI_create(app->renderer, app->currentProject);
+    app->backdropManagerUI = BackdropManagerUI_create(app->renderer, app->currentProject);
+    app->soundManagerUI = SoundManagerUI_create(app->renderer, app->currentProject);
+    app->penToolUI = PenToolUI_create(app->renderer, app->currentProject);
+    app->codeArea = CodeAreaUI_create(app->renderer, app->currentProject, app->engine);
+    app->blockPalette = BlockPaletteUI_create(app->renderer, app->currentProject, app->codeArea);
+
+    char* fontPath = findFontFile("arial.ttf");
+    app->speechFont = TTF_OpenFont(fontPath, 16);
+    if (!app->speechFont) {
+        printf("Warning: could not load speech font\n");
+    }
+    free(fontPath);
+
+    Project_addDefaultSprite(app->currentProject, "Sprite1");
+    Project_addDefaultBackdrop(app->currentProject, "Backdrop1");
+    Project_addDefaultSound(app->currentProject, "Sound1");
+
+    for (size_t i = 0; i < app->currentProject->sprites.size(); i++) {
+        Application_createPenCanvasForSprite(app, app->currentProject->sprites[i]);
+    }
+
+    app->running = true;
+    app->paused = false;
+    app->executing = false;
+    app->dragSpriteIndex = -1;
+    app->answerReady = false;
+    app->textInputBuffer[0] = '\0';
+    app->lastError[0] = '\0';
+    app->errorTime = 0;
+    return true;
+}
+
+void Application_run(Application* app) {
+    while (app->running) {
+        Application_handleEvents(app);
+        if (!app->paused) {
+            Application_update(app);
+        }
+        Application_render(app);
+        SDL_Delay(16);
+    }
+}
+
+void Application_handleEvents(Application* app) {
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_QUIT) {
+            app->running = false;
+        }
+        SpriteManagerUI_handleEvent(app->spriteManagerUI, &e);
+        BackdropManagerUI_handleEvent(app->backdropManagerUI, &e);
+        SoundManagerUI_handleEvent(app->soundManagerUI, &e);
+        PenToolUI_handleEvent(app->penToolUI, &e, app);
+        BlockPaletteUI_handleEvent(app->blockPalette, &e);
+        CodeAreaUI_handleEvent(app->codeArea, &e);
+
+        if (app->spriteManagerUI->selectedSpriteIndex != app->codeArea->selectedSpriteIndex) {
+            app->codeArea->selectedSpriteIndex = app->spriteManagerUI->selectedSpriteIndex;
+        }
+
+        if (e.type == SDL_KEYDOWN) {
+            if (e.key.keysym.sym == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT)) {
+                Uint32 flags = SDL_GetWindowFlags(app->window);
+                if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {
+                    SDL_SetWindowFullscreen(app->window, 0);
+                } else {
+                    SDL_SetWindowFullscreen(app->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                }
+            }
+        }
+
+        if (e.type == SDL_TEXTINPUT) {
+            size_t len = strlen(app->textInputBuffer);
+            size_t newLen = len + strlen(e.text.text);
+            if (newLen < sizeof(app->textInputBuffer) - 1) {
+                strcat(app->textInputBuffer, e.text.text);
+            }
+        }
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_BACKSPACE) {
+            size_t len = strlen(app->textInputBuffer);
+            if (len > 0) {
+                app->textInputBuffer[len - 1] = '\0';
+            }
+        }
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN && app->answerReady == false) {
+            SDL_StopTextInput();
+            strncpy(app->pendingAnswer, app->textInputBuffer, sizeof(app->pendingAnswer)-1);
+            app->pendingAnswer[sizeof(app->pendingAnswer)-1] = '\0';
+            app->answerReady = true;
+            app->textInputBuffer[0] = '\0';
+        }
+
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+            int x = e.button.x, y = e.button.y;
+            int winW, winH;
+            SDL_GetWindowSize(app->window, &winW, &winH);
+
+            int startY = 70;
+            int paletteWidth = 200;
+            int codeWidth = 400;
+            int sceneWidth = winW - paletteWidth - codeWidth;
+            int bottomHeight = 128;
+            int rightPanelHeight = winH - startY - bottomHeight;
+            int backdropPanelHeight = 150;
+            int soundPanelHeight = 150;
+            int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+            if (sceneHeight < 200) sceneHeight = 200;
+            SDL_Rect sceneRect = {paletteWidth + codeWidth, startY, sceneWidth, sceneHeight};
+
+            if (y >= startY && y < winH - bottomHeight && x >= sceneRect.x && x < sceneRect.x + sceneRect.w) {
+                int clickedSprite = ExecutionEngine_startSpriteClickScripts(app->engine, x, y, sceneRect);
+                if (clickedSprite >= 0) {
+                    app->spriteManagerUI->selectedSpriteIndex = clickedSprite;
+                    app->codeArea->selectedSpriteIndex = clickedSprite;
+                    Sprite* s = app->currentProject->sprites[clickedSprite];
+                    if (s->draggable) {
+                        app->dragSpriteIndex = clickedSprite;
+                        app->dragStartX = x;
+                        app->dragStartY = y;
+                        app->dragSpriteOrigX = s->x;
+                        app->dragSpriteOrigY = s->y;
+                    }
+                }
+            }
+
+            if (y < 40) {
+                int btnX = 5;
+                const char* buttons[] = {"New", "Save", "Load", "Start", "Stop", "Step", "Sprite", "Backdrop", "Sound"};
+                int numButtons = 9;
+                for (int i = 0; i < numButtons; i++) {
+                    if (x >= btnX && x <= btnX + 70) {
+                        switch (i) {
+                            case 0:
+                                Project_destroy(app->currentProject);
+                                app->currentProject = Project_create();
+                                Project_addDefaultSprite(app->currentProject, "Sprite1");
+                                Project_addDefaultBackdrop(app->currentProject, "Backdrop1");
+                                Project_addDefaultSound(app->currentProject, "Sound1");
+                                app->spriteManagerUI->project = app->currentProject;
+                                app->backdropManagerUI->project = app->currentProject;
+                                app->soundManagerUI->project = app->currentProject;
+                                app->penToolUI->project = app->currentProject;
+                                app->blockPalette->project = app->currentProject;
+                                app->codeArea->project = app->currentProject;
+                                app->engine->project = app->currentProject;
+                                app->engine->contexts.clear();
+                                app->spriteManagerUI->scrollOffset = 0;
+                                app->backdropManagerUI->scrollOffset = 0;
+                                app->soundManagerUI->scrollOffset = 0;
+                                app->blockPalette->blockScrollOffset = 0;
+                                app->codeArea->scrollX = 0;
+                                app->codeArea->scrollY = 0;
+                                app->spriteManagerUI->selectedSpriteIndex = 0;
+                                app->codeArea->selectedSpriteIndex = 0;
+                                app->codeArea->editingScript = -1;
+                                app->codeArea->editingBlock = -1;
+                                app->codeArea->editingParam = -1;
+                                app->codeArea->editBuffer.clear();
+                                SDL_StopTextInput();
+                                for (size_t j = 0; j < app->currentProject->sprites.size(); j++) {
+                                    Application_createPenCanvasForSprite(app, app->currentProject->sprites[j]);
+                                }
+                                printf("New project created\n");
+                                break;
+                            case 1:
+                                if (Project_save(app->currentProject, "project.txt")) {
+                                    printf("Project saved to project.txt\n");
+                                } else {
+                                    printf("Failed to save project\n");
+                                }
+                                break;
+                            case 2:
+                                if (Project_load(app->currentProject, "project.txt")) {
+                                    printf("Project loaded from project.txt\n");
+                                    for (size_t j = 0; j < app->currentProject->sprites.size(); j++) {
+                                        Application_createPenCanvasForSprite(app, app->currentProject->sprites[j]);
+                                    }
+                                    app->spriteManagerUI->selectedSpriteIndex = (app->currentProject->sprites.size() > 0) ? 0 : -1;
+                                    app->codeArea->selectedSpriteIndex = app->spriteManagerUI->selectedSpriteIndex;
+                                    app->spriteManagerUI->scrollOffset = 0;
+                                    app->backdropManagerUI->scrollOffset = 0;
+                                    app->soundManagerUI->scrollOffset = 0;
+                                    app->blockPalette->blockScrollOffset = 0;
+                                    app->codeArea->scrollX = 0;
+                                    app->codeArea->scrollY = 0;
+                                    app->codeArea->editingScript = -1;
+                                    app->codeArea->editingBlock = -1;
+                                    app->codeArea->editingParam = -1;
+                                    app->codeArea->editBuffer.clear();
+                                    SDL_StopTextInput();
+                                } else {
+                                    printf("Failed to load project\n");
+                                }
+                                break;
+                            case 3:
+                                app->executing = true;
+                                app->paused = false;
+                                ExecutionEngine_run(app->engine);
+                                printf("Start\n");
+                                break;
+                            case 4:
+                                app->executing = false;
+                                ExecutionEngine_stop(app->engine);
+                                printf("Stop\n");
+                                break;
+                            case 5:
+                                app->engine->stepMode = true;
+                                ExecutionEngine_step(app->engine, SDL_GetTicks());
+                                app->engine->stepMode = false;
+                                printf("Step\n");
+                                break;
+                            case 6:
+                                Project_addDefaultSprite(app->currentProject, "Sprite");
+                                Application_createPenCanvasForSprite(app, app->currentProject->sprites.back());
+                                app->spriteManagerUI->selectedSpriteIndex = app->currentProject->sprites.size() - 1;
+                                app->codeArea->selectedSpriteIndex = app->currentProject->sprites.size() - 1;
+                                printf("Add sprite\n");
+                                break;
+                            case 7:
+                                Project_addDefaultBackdrop(app->currentProject, "Backdrop");
+                                printf("Add backdrop\n");
+                                break;
+                            case 8:
+                                Project_addDefaultSound(app->currentProject, "Sound");
+                                app->soundManagerUI->selectedSoundIndex = app->currentProject->sounds.size() - 1;
+                                printf("Add sound\n");
+                                break;
+                        }
+                        break;
+                    }
+                    btnX += 80;
+                }
+                continue;
+            }
+        }
+
+        if (e.type == SDL_MOUSEMOTION && app->dragSpriteIndex >= 0) {
+            int x = e.motion.x, y = e.motion.y;
+            int winW, winH;
+            SDL_GetWindowSize(app->window, &winW, &winH);
+            int startY = 70;
+            int paletteWidth = 200, codeWidth = 400;
+            int sceneWidth = winW - paletteWidth - codeWidth;
+            int bottomHeight = 128, rightPanelHeight = winH - startY - bottomHeight;
+            int backdropPanelHeight = 150, soundPanelHeight = 150;
+            int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+            if (sceneHeight < 200) sceneHeight = 200;
+            SDL_Rect sceneRect = {paletteWidth + codeWidth, startY, sceneWidth, sceneHeight};
+
+            float stageX = (x - (sceneRect.x + sceneRect.w/2));
+            float stageY = (sceneRect.y + sceneRect.h/2 - y);
+            if (stageX < -240) stageX = -240;
+            if (stageX > 240) stageX = 240;
+            if (stageY < -180) stageY = -180;
+            if (stageY > 180) stageY = 180;
+
+            Sprite* s = app->currentProject->sprites[app->dragSpriteIndex];
+            s->x = stageX;
+            s->y = stageY;
+        }
+
+        if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT && app->dragSpriteIndex >= 0) {
+            app->dragSpriteIndex = -1;
+        }
+
+        if (e.type == SDL_KEYDOWN) {
+            switch (e.key.keysym.sym) {
+                case SDLK_SPACE:
+                    app->paused = !app->paused;
+                    break;
+                case SDLK_F5:
+                    app->executing = true;
+                    app->paused = false;
+                    ExecutionEngine_run(app->engine);
+                    break;
+                case SDLK_F6:
+                    app->engine->stepMode = true;
+                    ExecutionEngine_step(app->engine, SDL_GetTicks());
+                    app->engine->stepMode = false;
+                    break;
+                case SDLK_F7:
+                    if (app->spriteManagerUI->selectedSpriteIndex >= 0) {
+                        SpriteManagerUI_uploadCostume(app->spriteManagerUI, "sprite.png");
+                    } else {
+                        printf("No sprite selected.\n");
+                    }
+                    break;
+                case SDLK_F8:
+                    if (app->backdropManagerUI->selectedBackdropIndex >= 0) {
+                        BackdropManagerUI_uploadBackdrop(app->backdropManagerUI, "backdrop.png");
+                    } else {
+                        printf("Please select a backdrop first from the left panel.\n");
+                    }
+                    break;
+                case SDLK_F9:
+                    if (app->soundManagerUI->selectedSoundIndex >= 0) {
+                        SoundManagerUI_uploadSound(app->soundManagerUI, "sound.wav");
+                    } else {
+                        printf("No sound selected.\n");
+                    }
+                    break;
+            }
+            ExecutionEngine_startKeyScripts(app->engine, e.key.keysym.sym);
+        }
+    }
+}
+
+void Application_update(Application* app) {
+    if (app->executing && !app->paused) {
+        ExecutionEngine_step(app->engine, SDL_GetTicks());
+    }
+}
+
+void Application_render(Application* app) {
+    SDL_SetRenderDrawColor(app->renderer, 255, 255, 255, 255);
+    SDL_RenderClear(app->renderer);
+
+    int winW, winH;
+    SDL_GetWindowSize(app->window, &winW, &winH);
+
+    app->menuRect = {0, 0, winW, 40};
+    SDL_SetRenderDrawColor(app->renderer, 100, 100, 100, 255);
+    SDL_RenderFillRect(app->renderer, &app->menuRect);
+    SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(app->renderer, &app->menuRect);
+
+    const char* buttons[] = {"New", "Save", "Load", "Start", "Stop", "Step", "Sprite", "Backdrop", "Sound"};
+    int numButtons = 9;
+    int x = 5;
+    for (int i = 0; i < numButtons; i++) {
+        SDL_Rect btnRect = {x, 5, 70, 30};
+        SDL_SetRenderDrawColor(app->renderer, 220, 220, 220, 255);
+        SDL_RenderFillRect(app->renderer, &btnRect);
+        SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(app->renderer, &btnRect);
+
+        if (app->spriteManagerUI->font) {
+            SDL_Surface* surf = TTF_RenderText_Blended(app->spriteManagerUI->font, buttons[i], {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(app->renderer, surf);
+                SDL_Rect textRect = {x + (70 - surf->w)/2, 5 + (30 - surf->h)/2, surf->w, surf->h};
+                SDL_RenderCopy(app->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+        x += 80;
+    }
+
+    if (app->lastError[0] != '\0' && SDL_GetTicks() - app->errorTime < 5000) {
+        SDL_Rect errorBar = {0, 40, winW, 30};
+        SDL_SetRenderDrawColor(app->renderer, 255, 100, 100, 255);
+        SDL_RenderFillRect(app->renderer, &errorBar);
+        SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+        SDL_RenderDrawRect(app->renderer, &errorBar);
+
+        if (app->spriteManagerUI->font) {
+            SDL_Surface* surf = TTF_RenderText_Blended(app->spriteManagerUI->font, app->lastError, {255,255,255,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(app->renderer, surf);
+                SDL_Rect textRect = {10, 40 + (30 - surf->h)/2, surf->w, surf->h};
+                SDL_RenderCopy(app->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+    }
+
+    app->varPanelRect = {0, 70, winW, 30};
+    SDL_SetRenderDrawColor(app->renderer, 200, 200, 200, 255);
+    SDL_RenderFillRect(app->renderer, &app->varPanelRect);
+    SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(app->renderer, &app->varPanelRect);
+
+    Project* proj = app->currentProject;
+    if (app->spriteManagerUI->font) {
+        int textX = 10;
+        int textY = app->varPanelRect.y + (app->varPanelRect.h - 16) / 2;
+        for (size_t i = 0; i < proj->globalVariables.size(); i++) {
+            Variable* var = proj->globalVariables[i];
+            string buffer;
+            if (var->value.type == Value::VAL_NUMBER) {
+                buffer = var->name + " = " + to_string(var->value.num);
+            } else {
+                buffer = var->name + " = " + var->value.str;
+            }
+            SDL_Surface* surf = TTF_RenderText_Blended(app->spriteManagerUI->font, buffer.c_str(), {0,0,0,255});
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(app->renderer, surf);
+                SDL_Rect textRect = {textX, textY, surf->w, surf->h};
+                SDL_RenderCopy(app->renderer, tex, NULL, &textRect);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+                textX += surf->w + 20;
+            }
+        }
+    }
+
+    int startY = 100;
+    int paletteWidth = 200;
+    int codeWidth = 400;
+    int sceneWidth = winW - paletteWidth - codeWidth;
+    int bottomHeight = 128;
+    int rightPanelHeight = winH - startY - bottomHeight;
+    int backdropPanelHeight = 150;
+    int soundPanelHeight = 150;
+    int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+    if (sceneHeight < 200) sceneHeight = 200;
+
+    app->paletteRect = {0, startY, paletteWidth, sceneHeight};
+    app->codeRect = {paletteWidth, startY, codeWidth, sceneHeight};
+    app->sceneRect = {paletteWidth + codeWidth, startY, sceneWidth, sceneHeight};
+    app->backdropPanelRect = {paletteWidth + codeWidth, startY + sceneHeight, sceneWidth, backdropPanelHeight};
+    app->soundPanelRect = {paletteWidth + codeWidth, startY + sceneHeight + backdropPanelHeight, sceneWidth, soundPanelHeight};
+
+    int penPanelWidth = 200;
+    app->spritePanelRect = {0, winH - bottomHeight, winW - penPanelWidth, bottomHeight};
+    app->penPanelRect = {winW - penPanelWidth, winH - bottomHeight, penPanelWidth, bottomHeight};
+
+    app->blockPalette->rect = app->paletteRect;
+    app->codeArea->rect = app->codeRect;
+    app->spriteManagerUI->rect = app->spritePanelRect;
+    app->penToolUI->rect = app->penPanelRect;
+    app->backdropManagerUI->rect = app->backdropPanelRect;
+    app->soundManagerUI->rect = app->soundPanelRect;
+
+    if (proj->currentBackdrop >= 0 && proj->currentBackdrop < (int)proj->backdrops.size()) {
+        Backdrop* b = proj->backdrops[proj->currentBackdrop];
+        if (b->texture) {
+            SDL_RenderCopy(app->renderer, b->texture, NULL, &app->sceneRect);
+        } else {
+            SDL_SetRenderDrawColor(app->renderer, 200, 200, 255, 255);
+            SDL_RenderFillRect(app->renderer, &app->sceneRect);
+        }
+    } else {
+        SDL_SetRenderDrawColor(app->renderer, 200, 200, 200, 255);
+        SDL_RenderFillRect(app->renderer, &app->sceneRect);
+    }
+
+    for (size_t i = 0; i < proj->sprites.size(); i++) {
+        Sprite* s = proj->sprites[i];
+        if (s->penCanvas) {
+            SDL_RenderCopy(app->renderer, s->penCanvas, NULL, &app->sceneRect);
+        }
+    }
+
+    vector<Sprite*> sortedSprites = proj->sprites;
+    sort(sortedSprites.begin(), sortedSprites.end(), [](Sprite* a, Sprite* b) { return a->layer < b->layer; });
+
+    Uint32 now = SDL_GetTicks();
+
+    for (Sprite* s : sortedSprites) {
+        if (!s->visible) continue;
+
+        int screenX = app->sceneRect.x + app->sceneRect.w / 2 + (int)s->x;
+        int screenY = app->sceneRect.y + app->sceneRect.h / 2 - (int)s->y;
+        int spriteW = (int)(50 * s->size / 100.0f);
+        int spriteH = (int)(50 * s->size / 100.0f);
+        if (spriteW <= 0 || spriteH <= 0) continue;
+
+        SDL_Rect destRect = {screenX - spriteW/2, screenY - spriteH/2, spriteW, spriteH};
+
+        SDL_Texture* texture = NULL;
+        if (!s->costumes.empty() && s->currentCostume < (int)s->costumes.size()) {
+            texture = s->costumes[s->currentCostume]->texture;
+        }
+
+        if (texture) {
+            Uint8 origR, origG, origB, origA;
+            SDL_GetTextureColorMod(texture, &origR, &origG, &origB);
+            SDL_GetTextureAlphaMod(texture, &origA);
+
+            Uint8 r = origR, g = origG, b = origB;
+
+            if (s->colorEffect != 0) {
+                float factor = s->colorEffect / 200.0f;
+                r = (Uint8)(origR * (1.0f - factor) + 255 * factor);
+                g = (Uint8)(origG * (1.0f - factor));
+                b = (Uint8)(origB * (1.0f - factor) + 255 * factor);
+            }
+
+            float brightFactor = s->brightnessEffect / 100.0f;
+            r = (Uint8)(r * brightFactor);
+            g = (Uint8)(g * brightFactor);
+            b = (Uint8)(b * brightFactor);
+
+            float satFactor = s->saturationEffect / 100.0f;
+            Uint8 gray = (Uint8)(0.3f * r + 0.59f * g + 0.11f * b);
+            r = (Uint8)(r * satFactor + gray * (1.0f - satFactor));
+            g = (Uint8)(g * satFactor + gray * (1.0f - satFactor));
+            b = (Uint8)(b * satFactor + gray * (1.0f - satFactor));
+
+            SDL_SetTextureColorMod(texture, r, g, b);
+            SDL_RenderCopy(app->renderer, texture, NULL, &destRect);
+            SDL_SetTextureColorMod(texture, origR, origG, origB);
+            SDL_SetTextureAlphaMod(texture, origA);
+        } else {
+            Uint8 r = (s->currentCostume * 50) % 256;
+            Uint8 g = (s->currentCostume * 80) % 256;
+            Uint8 b = (s->currentCostume * 110) % 256;
+            float brightFactor = s->brightnessEffect / 100.0f;
+            r = (Uint8)(r * brightFactor);
+            g = (Uint8)(g * brightFactor);
+            b = (Uint8)(b * brightFactor);
+            SDL_SetRenderDrawColor(app->renderer, r, g, b, 255);
+            SDL_RenderFillRect(app->renderer, &destRect);
+            SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(app->renderer, &destRect);
+        }
+
+        if (app->speechFont) {
+            if (!s->sayText.empty() && (s->sayUntil == 0 || now < s->sayUntil)) {
+                int textW, textH;
+                TTF_SizeText(app->speechFont, s->sayText.c_str(), &textW, &textH);
+                int bubbleW = textW + 20;
+                int bubbleH = textH + 10;
+                int bubbleX = screenX - bubbleW/2;
+                int bubbleY = screenY - spriteH/2 - bubbleH - 5;
+                SDL_Rect bubbleRect = {bubbleX, bubbleY, bubbleW, bubbleH};
+                SDL_SetRenderDrawColor(app->renderer, 255, 255, 255, 255);
+                SDL_RenderFillRect(app->renderer, &bubbleRect);
+                SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+                SDL_RenderDrawRect(app->renderer, &bubbleRect);
+                SDL_Surface* surf = TTF_RenderText_Blended(app->speechFont, s->sayText.c_str(), {0,0,0,255});
+                if (surf) {
+                    SDL_Texture* tex = SDL_CreateTextureFromSurface(app->renderer, surf);
+                    SDL_Rect textRect = {bubbleX + 10, bubbleY + 5, surf->w, surf->h};
+                    SDL_RenderCopy(app->renderer, tex, NULL, &textRect);
+                    SDL_DestroyTexture(tex);
+                    SDL_FreeSurface(surf);
+                }
+            }
+            if (!s->thinkText.empty() && (s->thinkUntil == 0 || now < s->thinkUntil)) {
+                int textW, textH;
+                TTF_SizeText(app->speechFont, s->thinkText.c_str(), &textW, &textH);
+                int bubbleW = textW + 20;
+                int bubbleH = textH + 10;
+                int bubbleX = screenX - bubbleW/2;
+                int bubbleY = screenY - spriteH/2 - bubbleH - 5;
+                SDL_Rect bubbleRect = {bubbleX, bubbleY, bubbleW, bubbleH};
+                SDL_SetRenderDrawColor(app->renderer, 220, 220, 220, 255);
+                SDL_RenderFillRect(app->renderer, &bubbleRect);
+                SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+                SDL_RenderDrawRect(app->renderer, &bubbleRect);
+                SDL_Surface* surf = TTF_RenderText_Blended(app->speechFont, s->thinkText.c_str(), {0,0,0,255});
+                if (surf) {
+                    SDL_Texture* tex = SDL_CreateTextureFromSurface(app->renderer, surf);
+                    SDL_Rect textRect = {bubbleX + 10, bubbleY + 5, surf->w, surf->h};
+                    SDL_RenderCopy(app->renderer, tex, NULL, &textRect);
+                    SDL_DestroyTexture(tex);
+                    SDL_FreeSurface(surf);
+                }
+            }
+        }
+    }
+
+    SpriteManagerUI_render(app->spriteManagerUI);
+    PenToolUI_render(app->penToolUI);
+    BackdropManagerUI_render(app->backdropManagerUI);
+    SoundManagerUI_render(app->soundManagerUI);
+    BlockPaletteUI_render(app->blockPalette);
+    CodeAreaUI_render(app->codeArea);
+
+    SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(app->renderer, paletteWidth, startY, paletteWidth, winH - bottomHeight);
+    SDL_RenderDrawLine(app->renderer, paletteWidth + codeWidth, startY, paletteWidth + codeWidth, winH - bottomHeight);
+    SDL_RenderDrawLine(app->renderer, 0, winH - bottomHeight, winW, winH - bottomHeight);
+    SDL_RenderDrawLine(app->renderer, paletteWidth + codeWidth, startY + sceneHeight, winW, startY + sceneHeight);
+    SDL_RenderDrawLine(app->renderer, paletteWidth + codeWidth, startY + sceneHeight + backdropPanelHeight, winW, startY + sceneHeight + backdropPanelHeight);
+    SDL_RenderDrawLine(app->renderer, winW - penPanelWidth, winH - bottomHeight, winW - penPanelWidth, winH);
+
+    SDL_RenderPresent(app->renderer);
+}
