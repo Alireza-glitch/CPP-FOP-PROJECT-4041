@@ -3409,3 +3409,267 @@ void SoundManagerUI_uploadSound(SoundManagerUI* ui, const char* filepath) {
     }
     free(fullPath);
 }
+// PenToolUI functions
+
+PenToolUI* PenToolUI_create(SDL_Renderer* ren, Project* proj) {
+    PenToolUI* ui = new PenToolUI;
+    ui->renderer = ren;
+    ui->project = proj;
+    ui->rect = {0, 0, 0, 0};
+    ui->active = false;
+    ui->drawing = false;
+    ui->lastMouseX = ui->lastMouseY = 0;
+    ui->hue = 0;
+    ui->saturation = 100;
+    ui->brightness = 100;
+    ui->penSize = 5;
+    ui->draggingHue = ui->draggingSat = ui->draggingBright = ui->draggingSize = false;
+    char* fontPath = findFontFile("arial.ttf");
+    ui->font = TTF_OpenFont(fontPath, 12);
+    free(fontPath);
+    if (!ui->font) {
+        printf("Warning: Could not load font for pen tool\n");
+    }
+    return ui;
+}
+
+void PenToolUI_destroy(PenToolUI* ui) {
+    if (ui->font) TTF_CloseFont(ui->font);
+    delete ui;
+}
+
+void PenToolUI_render(PenToolUI* ui) {
+    SDL_SetRenderDrawColor(ui->renderer, 240, 240, 240, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->rect);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->rect);
+
+    int x = ui->rect.x + 10;
+    int y = ui->rect.y + 10;
+    int sliderW = 150;
+    int sliderH = 10;
+    int spacing = 25;
+
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "Pen Tool", {0,0,0,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {x, y, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+        y += 20;
+    }
+
+    SDL_Rect toggleBtn = {x, y, 60, 20};
+    SDL_SetRenderDrawColor(ui->renderer, ui->active ? 100 : 200, ui->active ? 200 : 100, 100, 255);
+    SDL_RenderFillRect(ui->renderer, &toggleBtn);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(ui->renderer, &toggleBtn);
+    if (ui->font) {
+        const char* label = ui->active ? "On" : "Off";
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, label, {0,0,0,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {toggleBtn.x + (60 - surf->w)/2, toggleBtn.y + (20 - surf->h)/2, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+    y += 25;
+
+    ui->colorPreview = {x, y, 30, 20};
+    SDL_Color color = hslToRgb(ui->hue, ui->saturation, ui->brightness);
+    SDL_SetRenderDrawColor(ui->renderer, color.r, color.g, color.b, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->colorPreview);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->colorPreview);
+    y += 25;
+
+    ui->hueSlider = {x, y, sliderW, sliderH};
+    SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->hueSlider);
+    int handleX = x + (int)(ui->hue / 200.0f * sliderW);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(ui->renderer, handleX, y, handleX, y + sliderH);
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "Hue", {0,0,0,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {x + sliderW + 5, y, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+    y += 15;
+
+    ui->satSlider = {x, y, sliderW, sliderH};
+    SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->satSlider);
+    handleX = x + (int)(ui->saturation / 100.0f * sliderW);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(ui->renderer, handleX, y, handleX, y + sliderH);
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "Sat", {0,0,0,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {x + sliderW + 5, y, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+    y += 15;
+
+    ui->brightSlider = {x, y, sliderW, sliderH};
+    SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->brightSlider);
+    handleX = x + (int)(ui->brightness / 100.0f * sliderW);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(ui->renderer, handleX, y, handleX, y + sliderH);
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "Bright", {0,0,0,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {x + sliderW + 5, y, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+    y += 15;
+
+    ui->sizeSlider = {x, y, sliderW, sliderH};
+    SDL_SetRenderDrawColor(ui->renderer, 200, 200, 200, 255);
+    SDL_RenderFillRect(ui->renderer, &ui->sizeSlider);
+    handleX = x + (int)((ui->penSize - 1) / 19.0f * sliderW);
+    SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(ui->renderer, handleX, y, handleX, y + sliderH);
+    if (ui->font) {
+        SDL_Surface* surf = TTF_RenderText_Blended(ui->font, "Size", {0,0,0,255});
+        if (surf) {
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+            SDL_Rect textRect = {x + sliderW + 5, y, surf->w, surf->h};
+            SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+            SDL_DestroyTexture(tex);
+            SDL_FreeSurface(surf);
+        }
+    }
+}
+
+void PenToolUI_handleEvent(PenToolUI* ui, SDL_Event* e, Application* app) {
+    if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+        int x = e->button.x, y = e->button.y;
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            SDL_Rect toggleBtn = {ui->rect.x + 10, ui->rect.y + 30, 60, 20};
+            if (x >= toggleBtn.x && x <= toggleBtn.x + toggleBtn.w && y >= toggleBtn.y && y <= toggleBtn.y + toggleBtn.h) {
+                ui->active = !ui->active;
+                return;
+            }
+            if (x >= ui->hueSlider.x && x <= ui->hueSlider.x + ui->hueSlider.w && y >= ui->hueSlider.y && y <= ui->hueSlider.y + ui->hueSlider.h) {
+                ui->draggingHue = true;
+                float norm = (float)(x - ui->hueSlider.x) / ui->hueSlider.w;
+                if (norm < 0) norm = 0;
+                if (norm > 1) norm = 1;
+                ui->hue = norm * 200;
+                return;
+            }
+            if (x >= ui->satSlider.x && x <= ui->satSlider.x + ui->satSlider.w && y >= ui->satSlider.y && y <= ui->satSlider.y + ui->satSlider.h) {
+                ui->draggingSat = true;
+                float norm = (float)(x - ui->satSlider.x) / ui->satSlider.w;
+                if (norm < 0) norm = 0;
+                if (norm > 1) norm = 1;
+                ui->saturation = norm * 100;
+                return;
+            }
+            if (x >= ui->brightSlider.x && x <= ui->brightSlider.x + ui->brightSlider.w && y >= ui->brightSlider.y && y <= ui->brightSlider.y + ui->brightSlider.h) {
+                ui->draggingBright = true;
+                float norm = (float)(x - ui->brightSlider.x) / ui->brightSlider.w;
+                if (norm < 0) norm = 0;
+                if (norm > 1) norm = 1;
+                ui->brightness = norm * 100;
+                return;
+            }
+            if (x >= ui->sizeSlider.x && x <= ui->sizeSlider.x + ui->sizeSlider.w && y >= ui->sizeSlider.y && y <= ui->sizeSlider.y + ui->sizeSlider.h) {
+                ui->draggingSize = true;
+                float norm = (float)(x - ui->sizeSlider.x) / ui->sizeSlider.w;
+                if (norm < 0) norm = 0;
+                if (norm > 1) norm = 1;
+                ui->penSize = 1 + (int)(norm * 19);
+                return;
+            }
+        } else {
+            if (ui->active && app->spriteManagerUI->selectedSpriteIndex >= 0) {
+                ui->drawing = true;
+                ui->lastMouseX = x;
+                ui->lastMouseY = y;
+            }
+        }
+    } else if (e->type == SDL_MOUSEMOTION && ui->drawing && ui->active) {
+        int x = e->motion.x, y = e->motion.y;
+        int winW, winH;
+        SDL_GetWindowSize(app->window, &winW, &winH);
+        int startY = 70;
+        int paletteWidth = 200, codeWidth = 400;
+        int sceneWidth = winW - paletteWidth - codeWidth;
+        int bottomHeight = 128;
+        int rightPanelHeight = winH - startY - bottomHeight;
+        int backdropPanelHeight = 150, soundPanelHeight = 150;
+        int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+        if (sceneHeight < 200) sceneHeight = 200;
+        SDL_Rect sceneRect = {paletteWidth + codeWidth, startY, sceneWidth, sceneHeight};
+
+        if (x >= sceneRect.x && x <= sceneRect.x + sceneRect.w &&
+            y >= sceneRect.y && y <= sceneRect.y + sceneRect.h) {
+            Sprite* s = app->currentProject->sprites[app->spriteManagerUI->selectedSpriteIndex];
+            int stageX1 = ui->lastMouseX - (sceneRect.x + sceneRect.w/2);
+            int stageY1 = (sceneRect.y + sceneRect.h/2) - ui->lastMouseY;
+            int stageX2 = x - (sceneRect.x + sceneRect.w/2);
+            int stageY2 = (sceneRect.y + sceneRect.h/2) - y;
+            SDL_Color color = hslToRgb(ui->hue, ui->saturation, ui->brightness);
+            drawLineOnCanvas(app->renderer, s->penCanvas,
+                             stageX1 + sceneRect.w/2, stageY1 + sceneRect.h/2,
+                             stageX2 + sceneRect.w/2, stageY2 + sceneRect.h/2,
+                             color, ui->penSize);
+            ui->lastMouseX = x;
+            ui->lastMouseY = y;
+        }
+    } else if (e->type == SDL_MOUSEBUTTONUP && e->button.button == SDL_BUTTON_LEFT) {
+        ui->drawing = false;
+        ui->draggingHue = false;
+        ui->draggingSat = false;
+        ui->draggingBright = false;
+        ui->draggingSize = false;
+    } else if (e->type == SDL_MOUSEMOTION) {
+        if (ui->draggingHue) {
+            int x = e->motion.x;
+            float norm = (float)(x - ui->hueSlider.x) / ui->hueSlider.w;
+            if (norm < 0) norm = 0;
+            if (norm > 1) norm = 1;
+            ui->hue = norm * 200;
+        } else if (ui->draggingSat) {
+            int x = e->motion.x;
+            float norm = (float)(x - ui->satSlider.x) / ui->satSlider.w;
+            if (norm < 0) norm = 0;
+            if (norm > 1) norm = 1;
+            ui->saturation = norm * 100;
+        } else if (ui->draggingBright) {
+            int x = e->motion.x;
+            float norm = (float)(x - ui->brightSlider.x) / ui->brightSlider.w;
+            if (norm < 0) norm = 0;
+            if (norm > 1) norm = 1;
+            ui->brightness = norm * 100;
+        } else if (ui->draggingSize) {
+            int x = e->motion.x;
+            float norm = (float)(x - ui->sizeSlider.x) / ui->sizeSlider.w;
+            if (norm < 0) norm = 0;
+            if (norm > 1) norm = 1;
+            ui->penSize = 1 + (int)(norm * 19);
+        }
+    }
+}
+
