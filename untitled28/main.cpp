@@ -513,3 +513,209 @@ void clearError(Application* app) {
     app->lastError[0] = '\0';
     app->errorTime = 0;
 }
+char* findFontFile(const char* filename) {
+    char* basePath = SDL_GetBasePath();
+    if (basePath) {
+        size_t len = strlen(basePath) + strlen(filename) + 1;
+        char* fullPath = (char*)malloc(len);
+        snprintf(fullPath, len, "%s%s", basePath, filename);
+        SDL_free(basePath);
+        FILE* f = fopen(fullPath, "r");
+        if (f) {
+            fclose(f);
+            return fullPath;
+        }
+        free(fullPath);
+    }
+#ifdef _WIN32
+    char* windir = getenv("WINDIR");
+    if (windir) {
+        size_t len = strlen(windir) + 20 + strlen(filename);
+        char* winPath = (char*)malloc(len);
+        snprintf(winPath, len, "%s\\Fonts\\%s", windir, filename);
+        FILE* f = fopen(winPath, "r");
+        if (f) {
+            fclose(f);
+            return winPath;
+        }
+        free(winPath);
+    }
+#endif
+    return strdup(filename);
+}
+
+const char* block_type_names[] = {
+        "move", "turn", "go to", "change x", "change y", "set direction",
+        "say", "think", "switch costume", "next costume", "switch backdrop", "next backdrop",
+        "change size", "set size", "change color", "set color", "clear effects",
+        "show", "hide", "go to layer", "change layer",
+        "play sound", "play sound until done", "stop all sounds", "change volume", "set volume",
+        "when flag clicked", "when key pressed", "when sprite clicked",
+        "broadcast", "broadcast and wait", "when I receive",
+        "wait", "repeat", "forever", "if", "if else", "wait until", "repeat until", "stop all",
+        "custom call", "custom define",
+        "add", "subtract", "multiply", "divide", "random",
+        "<", ">", "=", "and", "or", "not",
+        "join", "letter of", "length", "mod", "round",
+        "abs", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "ln", "log", "pow",
+        "set var", "change var", "var get", "number", "string",
+        "touching edge?", "mouse x", "mouse y", "key pressed?",
+        "pen down", "pen up", "set pen color", "change pen color",
+        "set pen brightness", "change pen brightness",
+        "set pen saturation", "change pen saturation",
+        "set pen size", "change pen size", "erase all", "stamp",
+        "change brightness", "set brightness",
+        "change saturation", "set saturation",
+        "costume number", "costume name",
+        "backdrop number", "backdrop name",
+        "size",
+        "touching mouse-pointer?", "touching sprite?", "touching color?", "color is touching color?",
+        "distance to", "ask and wait", "answer", "mouse down?",
+        "set drag mode", "timer", "reset timer",
+        "go to random position", "go to mouse-pointer", "if on edge, bounce",
+        "else", "endif", "endloop"
+};
+
+SDL_Color get_block_color(BlockType type) {
+    if (type >= BLOCK_MOVE && type <= BLOCK_SET_DIRECTION) return {100, 150, 255, 255};
+    if (type == BLOCK_GO_TO_RANDOM || type == BLOCK_GO_TO_MOUSE || type == BLOCK_IF_ON_EDGE_BOUNCE)
+        return {100, 150, 255, 255};
+    if (type >= BLOCK_SAY && type <= BLOCK_CHANGE_LAYER) return {150, 100, 255, 255};
+    if (type >= BLOCK_PLAY_SOUND && type <= BLOCK_SET_VOLUME) return {200, 100, 200, 255};
+    if (type >= BLOCK_WHEN_FLAG_CLICKED && type <= BLOCK_WHEN_I_RECEIVE) return {255, 200, 100, 255};
+    if (type >= BLOCK_WAIT && type <= BLOCK_STOP_ALL) return {255, 150, 100, 255};
+    if (type >= BLOCK_CUSTOM_CALL && type <= BLOCK_CUSTOM_DEFINE) return {150, 150, 150, 255};
+    if (type >= BLOCK_ADD && type <= BLOCK_POW) return {100, 255, 100, 255};
+    if (type >= BLOCK_SET_VARIABLE && type <= BLOCK_STRING) return {255, 255, 100, 255};
+    if (type >= BLOCK_TOUCHING_EDGE && type <= BLOCK_KEY_PRESSED) return {100, 200, 255, 255};
+    if (type >= BLOCK_PEN_DOWN && type <= BLOCK_STAMP) return {100, 255, 100, 255};
+    if (type == BLOCK_CHANGE_BRIGHTNESS || type == BLOCK_SET_BRIGHTNESS ||
+        type == BLOCK_CHANGE_SATURATION || type == BLOCK_SET_SATURATION ||
+        type == BLOCK_COSTUME_NUMBER || type == BLOCK_COSTUME_NAME ||
+        type == BLOCK_BACKDROP_NUMBER || type == BLOCK_BACKDROP_NAME ||
+        type == BLOCK_SIZE) {
+        return {150, 100, 255, 255};
+    }
+    if (type == BLOCK_TOUCHING_MOUSEPOINTER || type == BLOCK_TOUCHING_SPRITE ||
+        type == BLOCK_TOUCHING_COLOR || type == BLOCK_COLOR_TOUCHING_COLOR ||
+        type == BLOCK_DISTANCE_TO || type == BLOCK_ASK_AND_WAIT ||
+        type == BLOCK_ANSWER || type == BLOCK_MOUSE_DOWN ||
+        type == BLOCK_SET_DRAG_MODE || type == BLOCK_TIMER ||
+        type == BLOCK_RESET_TIMER) {
+        return {100, 200, 255, 255};
+    }
+    return {160, 160, 160, 255};
+}
+
+void DrawRoundedRect(SDL_Renderer* renderer, SDL_Rect rect, int radius, SDL_Color color) {
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    SDL_Rect inner = {rect.x + radius, rect.y, rect.w - 2*radius, rect.h};
+    SDL_RenderFillRect(renderer, &inner);
+    inner = {rect.x, rect.y + radius, rect.w, rect.h - 2*radius};
+    SDL_RenderFillRect(renderer, &inner);
+    for (int dx = -radius; dx <= radius; dx++) {
+        for (int dy = -radius; dy <= radius; dy++) {
+            if (dx*dx + dy*dy <= radius*radius) {
+                SDL_RenderDrawPoint(renderer, rect.x + radius + dx, rect.y + radius + dy);
+                SDL_RenderDrawPoint(renderer, rect.x + rect.w - radius + dx, rect.y + radius + dy);
+                SDL_RenderDrawPoint(renderer, rect.x + radius + dx, rect.y + rect.h - radius + dy);
+                SDL_RenderDrawPoint(renderer, rect.x + rect.w - radius + dx, rect.y + rect.h - radius + dy);
+            }
+        }
+    }
+}
+
+SDL_Texture* loadTexture(SDL_Renderer* renderer, const char* path) {
+    SDL_Texture* newTexture = NULL;
+    SDL_Surface* loadedSurface = IMG_Load(path);
+    if (loadedSurface == NULL) {
+        printf("Unable to load image %s! SDL_image Error: %s\n", path, IMG_GetError());
+    } else {
+        newTexture = SDL_CreateTextureFromSurface(renderer, loadedSurface);
+        SDL_FreeSurface(loadedSurface);
+        if (newTexture == NULL) {
+            printf("Unable to create texture from %s! SDL Error: %s\n", path, SDL_GetError());
+        }
+    }
+    return newTexture;
+}
+
+int findSoundByName(Project* proj, const char* name) {
+    for (size_t i = 0; i < proj->sounds.size(); i++) {
+        if (proj->sounds[i]->name == name) return i;
+    }
+    return -1;
+}
+
+Variable* findVariable(Project* proj, const string& name) {
+    for (size_t i = 0; i < proj->globalVariables.size(); i++) {
+        if (proj->globalVariables[i]->name == name)
+            return proj->globalVariables[i];
+    }
+    return nullptr;
+}
+
+void setVariable(Project* proj, const string& name, const Value& val) {
+    Variable* var = findVariable(proj, name);
+    if (var) {
+        var->value = val;
+    } else {
+        Variable* newVar = new Variable;
+        newVar->name = name;
+        newVar->value = val;
+        proj->globalVariables.push_back(newVar);
+    }
+}
+
+Value getVariable(Project* proj, const string& name) {
+    Variable* var = findVariable(proj, name);
+    if (var) return var->value;
+    return make_number(0);
+}
+
+SDL_Scancode keyNameToScancode(const char* name) {
+    if (!name) return SDL_SCANCODE_UNKNOWN;
+    string n = name;
+    if (n == "space") return SDL_SCANCODE_SPACE;
+    if (n == "up arrow") return SDL_SCANCODE_UP;
+    if (n == "down arrow") return SDL_SCANCODE_DOWN;
+    if (n == "left arrow") return SDL_SCANCODE_LEFT;
+    if (n == "right arrow") return SDL_SCANCODE_RIGHT;
+    if (n == "a") return SDL_SCANCODE_A;
+    if (n == "b") return SDL_SCANCODE_B;
+    if (n == "c") return SDL_SCANCODE_C;
+    if (n == "d") return SDL_SCANCODE_D;
+    if (n == "e") return SDL_SCANCODE_E;
+    if (n == "f") return SDL_SCANCODE_F;
+    if (n == "g") return SDL_SCANCODE_G;
+    if (n == "h") return SDL_SCANCODE_H;
+    if (n == "i") return SDL_SCANCODE_I;
+    if (n == "j") return SDL_SCANCODE_J;
+    if (n == "k") return SDL_SCANCODE_K;
+    if (n == "l") return SDL_SCANCODE_L;
+    if (n == "m") return SDL_SCANCODE_M;
+    if (n == "n") return SDL_SCANCODE_N;
+    if (n == "o") return SDL_SCANCODE_O;
+    if (n == "p") return SDL_SCANCODE_P;
+    if (n == "q") return SDL_SCANCODE_Q;
+    if (n == "r") return SDL_SCANCODE_R;
+    if (n == "s") return SDL_SCANCODE_S;
+    if (n == "t") return SDL_SCANCODE_T;
+    if (n == "u") return SDL_SCANCODE_U;
+    if (n == "v") return SDL_SCANCODE_V;
+    if (n == "w") return SDL_SCANCODE_W;
+    if (n == "x") return SDL_SCANCODE_X;
+    if (n == "y") return SDL_SCANCODE_Y;
+    if (n == "z") return SDL_SCANCODE_Z;
+    if (n == "0") return SDL_SCANCODE_0;
+    if (n == "1") return SDL_SCANCODE_1;
+    if (n == "2") return SDL_SCANCODE_2;
+    if (n == "3") return SDL_SCANCODE_3;
+    if (n == "4") return SDL_SCANCODE_4;
+    if (n == "5") return SDL_SCANCODE_5;
+    if (n == "6") return SDL_SCANCODE_6;
+    if (n == "7") return SDL_SCANCODE_7;
+    if (n == "8") return SDL_SCANCODE_8;
+    if (n == "9") return SDL_SCANCODE_9;
+    return SDL_SCANCODE_UNKNOWN;
+}
