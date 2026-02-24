@@ -4006,3 +4006,456 @@ void BlockPaletteUI_handleEvent(BlockPaletteUI* ui, SDL_Event* e) {
         }
     }
 }
+// CodeAreaUI functions
+
+void getBlockDisplayText(Block* block, Sprite* sprite, char* buffer, size_t bufsize) {
+    const char* name = block_type_names[block->type];
+    switch (block->type) {
+        case BLOCK_MOVE:
+        case BLOCK_TURN:
+        case BLOCK_CHANGE_X:
+        case BLOCK_CHANGE_Y:
+        case BLOCK_SET_DIRECTION:
+        case BLOCK_CHANGE_SIZE:
+        case BLOCK_SET_SIZE:
+        case BLOCK_CHANGE_VOLUME:
+        case BLOCK_SET_VOLUME:
+        case BLOCK_WAIT:
+        case BLOCK_REPEAT:
+        case BLOCK_SET_PEN_COLOR:
+        case BLOCK_CHANGE_PEN_COLOR:
+        case BLOCK_SET_PEN_BRIGHTNESS:
+        case BLOCK_CHANGE_PEN_BRIGHTNESS:
+        case BLOCK_SET_PEN_SATURATION:
+        case BLOCK_CHANGE_PEN_SATURATION:
+        case BLOCK_SET_PEN_SIZE:
+        case BLOCK_CHANGE_PEN_SIZE:
+        case BLOCK_CHANGE_BRIGHTNESS:
+        case BLOCK_SET_BRIGHTNESS:
+        case BLOCK_CHANGE_SATURATION:
+        case BLOCK_SET_SATURATION:
+            snprintf(buffer, bufsize, "%s %.1f", name, block->numParam1);
+            break;
+        case BLOCK_GOTO:
+            snprintf(buffer, bufsize, "%s (%.1f, %.1f)", name, block->numParam1, block->numParam2);
+            break;
+        case BLOCK_SWITCH_COSTUME:
+            if (!block->strParam.empty()) {
+                snprintf(buffer, bufsize, "%s %s", name, block->strParam.c_str());
+            } else {
+                snprintf(buffer, bufsize, "%s %d", name, (int)block->numParam1);
+            }
+            break;
+        case BLOCK_SAY:
+        case BLOCK_THINK:
+            if (!block->strParam.empty()) {
+                if (block->numParam1 > 0) {
+                    snprintf(buffer, bufsize, "%s %s for %.1f", name, block->strParam.c_str(), block->numParam1);
+                } else {
+                    snprintf(buffer, bufsize, "%s %s", name, block->strParam.c_str());
+                }
+            } else {
+                if (block->numParam1 > 0) {
+                    snprintf(buffer, bufsize, "%s for %.1f", name, block->numParam1);
+                } else {
+                    snprintf(buffer, bufsize, "%s", name);
+                }
+            }
+            break;
+        case BLOCK_IF:
+        case BLOCK_IF_ELSE:
+            snprintf(buffer, bufsize, "%s (%.1f)", name, block->numParam1);
+            break;
+        default:
+            snprintf(buffer, bufsize, "%s", name);
+            break;
+    }
+}
+
+CodeAreaUI* CodeAreaUI_create(SDL_Renderer* ren, Project* proj, ExecutionEngine* engine) {
+    CodeAreaUI* ui = new CodeAreaUI;
+    ui->renderer = ren;
+    ui->project = proj;
+    ui->engine = engine;
+    ui->selectedSpriteIndex = -1;
+    ui->selectedScriptIndex = -1;
+    ui->selectedBlockIndex = -1;
+    ui->scrollX = 0;
+    ui->scrollY = 0;
+    ui->rect = {0, 0, 0, 0};
+    ui->editingScript = -1;
+    ui->editingBlock = -1;
+    ui->editingParam = -1;
+    char* fontPath = findFontFile("arial.ttf");
+    ui->font = TTF_OpenFont(fontPath, 14);
+    free(fontPath);
+    if (!ui->font) {
+        printf("CodeAreaUI font error: %s\n", TTF_GetError());
+    }
+    return ui;
+}
+
+void CodeAreaUI_destroy(CodeAreaUI* ui) {
+    if (ui->font) TTF_CloseFont(ui->font);
+    delete ui;
+}
+
+void CodeAreaUI_render(CodeAreaUI* ui) {
+    SDL_SetRenderDrawColor(ui->renderer, 100, 100, 100, 255);
+    SDL_RenderDrawRect(ui->renderer, &ui->rect);
+
+    if (ui->selectedSpriteIndex >= 0 && ui->selectedSpriteIndex < (int)ui->project->sprites.size()) {
+        Sprite* s = ui->project->sprites[ui->selectedSpriteIndex];
+        int scriptSpacing = 10;
+        int scriptWidth = 180;
+        int blockHeight = 40;
+        int blockGap = 2;
+
+        vector<int> execScripts, execPCs;
+        if (ui->engine) {
+            for (size_t k = 0; k < ui->engine->contexts.size(); k++) {
+                ExecutionContext* ctx = ui->engine->contexts[k];
+                if (ctx->spriteId == ui->selectedSpriteIndex) {
+                    execScripts.push_back(ctx->scriptId);
+                    execPCs.push_back(ctx->pc);
+                }
+            }
+        }
+
+        for (size_t i = 0; i < s->scripts.size(); i++) {
+            Script* script = s->scripts[i];
+            int scriptX = ui->rect.x + 10 + i * (scriptWidth + scriptSpacing) - ui->scrollX;
+            int scriptY = ui->rect.y + 10 - ui->scrollY;
+            if (scriptX + scriptWidth > ui->rect.x && scriptX < ui->rect.x + ui->rect.w) {
+                for (size_t j = 0; j < script->blocks.size(); j++) {
+                    int blockY = scriptY + j * (blockHeight + blockGap);
+                    if (blockY + blockHeight > ui->rect.y && blockY < ui->rect.y + ui->rect.h) {
+                        Block* block = script->blocks[j];
+                        SDL_Color color = get_block_color(block->type);
+
+                        bool isExecuting = false;
+                        for (size_t k = 0; k < execScripts.size(); k++) {
+                            if (execScripts[k] == (int)i && execPCs[k] == (int)j) {
+                                isExecuting = true;
+                                break;
+                            }
+                        }
+                        if (isExecuting) {
+                            if (color.r > 170) color.r = 255; else color.r = (Uint8)(color.r * 1.5);
+                            if (color.g > 170) color.g = 255; else color.g = (Uint8)(color.g * 1.5);
+                            if (color.b > 170) color.b = 255; else color.b = (Uint8)(color.b * 1.5);
+                        }
+
+                        bool isEditing = (ui->editingScript == (int)i && ui->editingBlock == (int)j);
+
+                        SDL_SetRenderDrawColor(ui->renderer, color.r, color.g, color.b, 255);
+                        SDL_Rect blockRect = {scriptX, blockY, scriptWidth - 10, blockHeight};
+                        SDL_RenderFillRect(ui->renderer, &blockRect);
+                        SDL_SetRenderDrawColor(ui->renderer, 0, 0, 0, 255);
+                        SDL_RenderDrawRect(ui->renderer, &blockRect);
+
+                        if (isExecuting) {
+                            SDL_SetRenderDrawColor(ui->renderer, 255, 0, 0, 255);
+                            for (int thick = 1; thick <= 2; thick++) {
+                                SDL_Rect borderRect = {scriptX - thick, blockY - thick, scriptWidth - 10 + 2*thick, blockHeight + 2*thick};
+                                SDL_RenderDrawRect(ui->renderer, &borderRect);
+                            }
+                        }
+                        if (isEditing) {
+                            SDL_SetRenderDrawColor(ui->renderer, 0, 255, 0, 255);
+                            for (int thick = 1; thick <= 2; thick++) {
+                                SDL_Rect borderRect = {scriptX - thick, blockY - thick, scriptWidth - 10 + 2*thick, blockHeight + 2*thick};
+                                SDL_RenderDrawRect(ui->renderer, &borderRect);
+                            }
+                        }
+
+                        char blockText[256];
+                        if (isEditing) {
+                            snprintf(blockText, sizeof(blockText), "%s", ui->editBuffer.c_str());
+                        } else {
+                            getBlockDisplayText(block, s, blockText, sizeof(blockText));
+                        }
+
+                        if (ui->font) {
+                            SDL_Surface* surf = TTF_RenderText_Blended(ui->font, blockText, {0,0,0,255});
+                            if (surf) {
+                                SDL_Texture* tex = SDL_CreateTextureFromSurface(ui->renderer, surf);
+                                SDL_Rect textRect = {scriptX + 5, blockY + (blockHeight - surf->h)/2, surf->w, surf->h};
+                                SDL_RenderCopy(ui->renderer, tex, NULL, &textRect);
+                                SDL_DestroyTexture(tex);
+                                SDL_FreeSurface(surf);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void CodeAreaUI_handleEvent(CodeAreaUI* ui, SDL_Event* e) {
+    if (e->type == SDL_MOUSEBUTTONDOWN) {
+        int x = e->button.x, y = e->button.y;
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            if (ui->selectedSpriteIndex < 0 || ui->selectedSpriteIndex >= (int)ui->project->sprites.size()) {
+                return;
+            }
+            Sprite* sprite = ui->project->sprites[ui->selectedSpriteIndex];
+            int scriptSpacing = 10;
+            int scriptWidth = 180;
+            int blockHeight = 40;
+            int hitScript = -1, hitBlock = -1;
+            for (size_t i = 0; i < sprite->scripts.size(); i++) {
+                int scriptX = ui->rect.x + 10 + i * (scriptWidth + scriptSpacing) - ui->scrollX;
+                if (x < scriptX || x > scriptX + scriptWidth - 10) continue;
+                for (size_t j = 0; j < sprite->scripts[i]->blocks.size(); j++) {
+                    int blockY = ui->rect.y + 10 - ui->scrollY + j * (blockHeight + 2);
+                    if (y >= blockY && y <= blockY + blockHeight) {
+                        hitScript = i;
+                        hitBlock = j;
+                        break;
+                    }
+                }
+                if (hitScript != -1) break;
+            }
+            if (hitScript != -1 && hitBlock != -1) {
+                if (e->button.button == SDL_BUTTON_LEFT) {
+                    Block* block = sprite->scripts[hitScript]->blocks[hitBlock];
+                    int paramIndex = 0;
+                    if (block->type == BLOCK_GOTO) {
+                        int blockScreenX = ui->rect.x + 10 + hitScript * (scriptWidth + scriptSpacing) - ui->scrollX;
+                        int blockWidth = scriptWidth - 10;
+                        if (x > blockScreenX + blockWidth / 2) {
+                            paramIndex = 1;
+                            printf("Editing GOTO: y parameter\n");
+                        } else {
+                            paramIndex = 0;
+                            printf("Editing GOTO: x parameter\n");
+                        }
+                    } else if (block->type == BLOCK_SAY || block->type == BLOCK_THINK) {
+                        if (block->numParam1 != 0) {
+                            int blockScreenX = ui->rect.x + 10 + hitScript * (scriptWidth + scriptSpacing) - ui->scrollX;
+                            int blockWidth = scriptWidth - 10;
+                            if (x > blockScreenX + blockWidth / 2) {
+                                paramIndex = 1;
+                                printf("Editing SAY/THINK: duration parameter\n");
+                            } else {
+                                paramIndex = 0;
+                                printf("Editing SAY/THINK: text parameter\n");
+                            }
+                        } else {
+                            paramIndex = 0;
+                            printf("Editing SAY/THINK: text parameter (no duration)\n");
+                        }
+                    } else if (block->type == BLOCK_IF || block->type == BLOCK_IF_ELSE) {
+                        paramIndex = 0;
+                        printf("Editing IF/IF-ELSE condition\n");
+                    }
+                    ui->editingScript = hitScript;
+                    ui->editingBlock = hitBlock;
+                    ui->editingParam = paramIndex;
+                    if (paramIndex == 0 && (block->type == BLOCK_SAY || block->type == BLOCK_THINK)) {
+                        ui->editBuffer = block->strParam;
+                    } else {
+                        float val = (paramIndex == 0) ? block->numParam1 : block->numParam2;
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%g", val);
+                        ui->editBuffer = buf;
+                    }
+                    SDL_StartTextInput();
+                    printf("Editing block at script %d block %d, param %d, initial value %s\n", hitScript, hitBlock, paramIndex, ui->editBuffer.c_str());
+                } else if (e->button.button == SDL_BUTTON_RIGHT) {
+                    Script* script = sprite->scripts[hitScript];
+                    free_block(script->blocks[hitBlock]);
+                    script->blocks.erase(script->blocks.begin() + hitBlock);
+                    if (script->blocks.empty()) {
+                        delete script;
+                        sprite->scripts.erase(sprite->scripts.begin() + hitScript);
+                    }
+                    if (ui->selectedScriptIndex == hitScript && ui->selectedBlockIndex >= hitBlock) {
+                        ui->selectedBlockIndex = -1;
+                    }
+                    if (hitScript < (int)sprite->scripts.size()) {
+                        preprocess_script(sprite->scripts[hitScript]);
+                    }
+                }
+            } else {
+                ui->selectedScriptIndex = -1;
+                ui->selectedBlockIndex = -1;
+            }
+        }
+    } else if (e->type == SDL_TEXTINPUT) {
+        if (ui->editingScript >= 0 && ui->editingBlock >= 0) {
+            ui->editBuffer += e->text.text;
+        }
+    } else if (e->type == SDL_KEYDOWN) {
+        if (ui->editingScript >= 0 && ui->editingBlock >= 0) {
+            if (e->key.keysym.sym == SDLK_RETURN || e->key.keysym.sym == SDLK_KP_ENTER) {
+                if (ui->editBuffer.empty()) {
+                    ui->editingScript = -1;
+                    ui->editingBlock = -1;
+                    ui->editingParam = -1;
+                    SDL_StopTextInput();
+                    return;
+                }
+                Sprite* sprite = ui->project->sprites[ui->selectedSpriteIndex];
+                if (sprite && ui->editingScript < (int)sprite->scripts.size()) {
+                    Script* script = sprite->scripts[ui->editingScript];
+                    if (ui->editingBlock < (int)script->blocks.size()) {
+                        Block* block = script->blocks[ui->editingBlock];
+                        if (ui->editingParam == 0 && (block->type == BLOCK_SAY || block->type == BLOCK_THINK)) {
+                            block->strParam = ui->editBuffer;
+                            printf("Set strParam to %s\n", ui->editBuffer.c_str());
+                        } else {
+                            float newVal = (float)atof(ui->editBuffer.c_str());
+                            if (ui->editingParam == 0) {
+                                block->numParam1 = newVal;
+                                printf("Set numParam1 to %f\n", newVal);
+                            } else {
+                                block->numParam2 = newVal;
+                                printf("Set numParam2 to %f\n", newVal);
+                            }
+                        }
+                    }
+                }
+                ui->editingScript = -1;
+                ui->editingBlock = -1;
+                ui->editingParam = -1;
+                SDL_StopTextInput();
+            } else if (e->key.keysym.sym == SDLK_ESCAPE) {
+                ui->editingScript = -1;
+                ui->editingBlock = -1;
+                ui->editingParam = -1;
+                SDL_StopTextInput();
+            } else if (e->key.keysym.sym == SDLK_BACKSPACE) {
+                if (!ui->editBuffer.empty()) {
+                    ui->editBuffer.pop_back();
+                }
+            }
+        }
+    } else if (e->type == SDL_MOUSEWHEEL) {
+        int x, y;
+        SDL_GetMouseState(&x, &y);
+        if (x >= ui->rect.x && x <= ui->rect.x + ui->rect.w &&
+            y >= ui->rect.y && y <= ui->rect.y + ui->rect.h) {
+            if (e->wheel.y != 0) {
+                if (e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+                    ui->scrollY += e->wheel.y * 20;
+                } else {
+                    ui->scrollY -= e->wheel.y * 20;
+                }
+                int maxScroll = 500;
+                if (ui->scrollY < 0) ui->scrollY = 0;
+                if (ui->scrollY > maxScroll) ui->scrollY = maxScroll;
+            }
+        }
+    }
+}
+
+void CodeAreaUI_addBlockAt(CodeAreaUI* ui, int blockType, int screenX, int screenY) {
+    if (ui->selectedSpriteIndex < 0 || ui->selectedSpriteIndex >= (int)ui->project->sprites.size()) return;
+    Sprite* sprite = ui->project->sprites[ui->selectedSpriteIndex];
+    if (!sprite) return;
+
+    int canvasX = screenX - ui->rect.x + ui->scrollX;
+    int canvasY = screenY - ui->rect.y + ui->scrollY;
+
+    int scriptIndex = -1;
+    for (size_t i = 0; i < sprite->scripts.size(); i++) {
+        int scriptLeft = 10 + i * (180 + 10);
+        int scriptRight = scriptLeft + 180;
+        if (canvasX >= scriptLeft && canvasX <= scriptRight) {
+            scriptIndex = i;
+            break;
+        }
+    }
+    if (scriptIndex == -1) return;
+
+    Script* script = sprite->scripts[scriptIndex];
+
+    int scriptTop = 10;
+    int insertIndex = 0;
+    if (canvasY < scriptTop) {
+        insertIndex = 0;
+    } else {
+        for (size_t j = 0; j < script->blocks.size(); j++) {
+            int blockTop = scriptTop + j * (40 + 2);
+            int blockBottom = blockTop + 40;
+            if (canvasY >= blockTop && canvasY <= blockBottom) {
+                insertIndex = j + 1;
+                break;
+            } else if (canvasY < blockTop) {
+                insertIndex = j;
+                break;
+            }
+        }
+        if (insertIndex == 0 && !script->blocks.empty() && canvasY > scriptTop + (int)script->blocks.size() * (40 + 2)) {
+            insertIndex = script->blocks.size();
+        }
+    }
+
+    Block* newBlock = new Block;
+    newBlock->type = (BlockType)blockType;
+    newBlock->numParam1 = 0;
+    newBlock->numParam2 = 0;
+    newBlock->intParam = 0;
+    newBlock->bodyEnd = -1;
+    newBlock->elseStart = -1;
+
+    vector<Block*> extraBlocks;
+    switch (blockType) {
+        case BLOCK_REPEAT:
+        case BLOCK_FOREVER:
+        case BLOCK_REPEAT_UNTIL: {
+            Block* endLoopBlock = new Block;
+            endLoopBlock->type = BLOCK_ENDLOOP;
+            endLoopBlock->numParam1 = 0;
+            endLoopBlock->numParam2 = 0;
+            endLoopBlock->intParam = 0;
+            endLoopBlock->bodyEnd = -1;
+            endLoopBlock->elseStart = -1;
+            extraBlocks.push_back(endLoopBlock);
+            break;
+        }
+        case BLOCK_IF: {
+            Block* endBlock = new Block;
+            endBlock->type = BLOCK_ENDIF;
+            endBlock->numParam1 = 0;
+            endBlock->numParam2 = 0;
+            endBlock->intParam = 0;
+            endBlock->bodyEnd = -1;
+            endBlock->elseStart = -1;
+            extraBlocks.push_back(endBlock);
+            break;
+        }
+        case BLOCK_IF_ELSE: {
+            Block* elseBlock = new Block;
+            elseBlock->type = BLOCK_ELSE;
+            elseBlock->numParam1 = 0;
+            elseBlock->numParam2 = 0;
+            elseBlock->intParam = 0;
+            elseBlock->bodyEnd = -1;
+            elseBlock->elseStart = -1;
+            Block* endBlock = new Block;
+            endBlock->type = BLOCK_ENDIF;
+            endBlock->numParam1 = 0;
+            endBlock->numParam2 = 0;
+            endBlock->intParam = 0;
+            endBlock->bodyEnd = -1;
+            endBlock->elseStart = -1;
+            extraBlocks.push_back(elseBlock);
+            extraBlocks.push_back(endBlock);
+            break;
+        }
+        default:
+            break;
+    }
+
+    script->blocks.insert(script->blocks.begin() + insertIndex, newBlock);
+    for (size_t k = 0; k < extraBlocks.size(); k++) {
+        script->blocks.insert(script->blocks.begin() + insertIndex + 1 + k, extraBlocks[k]);
+    }
+
+    preprocess_script(script);
+};
