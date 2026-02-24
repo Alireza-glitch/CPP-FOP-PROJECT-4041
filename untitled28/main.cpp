@@ -1696,3 +1696,906 @@ void Application_render(Application* app) {
 
     SDL_RenderPresent(app->renderer);
 }
+// ExecutionEngine function
+void ExecutionEngine_step(ExecutionEngine* eng, Uint32 currentTime) {
+    int stepsThisFrame = 0;
+    int winW, winH;
+    SDL_GetWindowSize(gWindow, &winW, &winH);
+    SDL_Renderer* renderer = SDL_GetRenderer(gWindow);
+    int paletteWidth = 200;
+    int codeWidth = 400;
+    int sceneWidth = winW - paletteWidth - codeWidth;
+    int bottomHeight = 128;
+    int rightPanelHeight = winH - 40 - bottomHeight;
+    int backdropPanelHeight = 150;
+    int soundPanelHeight = 150;
+    int sceneHeight = rightPanelHeight - backdropPanelHeight - soundPanelHeight;
+    if (sceneHeight < 200) sceneHeight = 200;
+    SDL_Rect stageRect = {paletteWidth + codeWidth, 40, sceneWidth, sceneHeight};
+
+    for (int i = 0; i < (int)eng->contexts.size(); i++) {
+        ExecutionContext* ctx = eng->contexts[i];
+
+        if (ctx->waitingForAnswer) {
+            if (gApp && gApp->answerReady) {
+                eng->project->answer = gApp->pendingAnswer;
+                gApp->answerReady = false;
+                ctx->waitingForAnswer = false;
+                ctx->pc++;
+            }
+            continue;
+        }
+
+        if (ctx->waitUntil > currentTime) continue;
+
+        if (ctx->waitingForSoundChannel != -1) {
+            if (!Mix_Playing(ctx->waitingForSoundChannel)) {
+                ctx->pc++;
+                ctx->waitingForSoundChannel = -1;
+            }
+            continue;
+        }
+
+        if (ctx->pc < 0) continue;
+        Sprite* sprite = eng->project->sprites[ctx->spriteId];
+        if (ctx->scriptId >= (int)sprite->scripts.size()) {
+            ExecutionEngine_removeContext(eng, i);
+            i--;
+            continue;
+        }
+        Script* script = sprite->scripts[ctx->scriptId];
+        if (ctx->pc >= (int)script->blocks.size()) {
+            ExecutionEngine_removeContext(eng, i);
+            i--;
+            continue;
+        }
+        Block* block = script->blocks[ctx->pc];
+
+        switch (block->type) {
+            case BLOCK_MOVE: {
+                float steps = block->numParam1;
+                float rad = sprite->direction * (float)M_PI / 180.0f;
+                float newX = sprite->x + steps * cosf(rad);
+                float newY = sprite->y + steps * sinf(rad);
+                if (newX > 240) newX = 240;
+                if (newX < -240) newX = -240;
+                if (newY > 180) newY = 180;
+                if (newY < -180) newY = -180;
+
+                if (sprite->penDown) {
+                    int x1 = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                    int y1 = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                    int x2 = stageRect.x + stageRect.w/2 + (int)newX;
+                    int y2 = stageRect.y + stageRect.h/2 - (int)newY;
+                    SDL_Color color = hslToRgb(sprite->penHue, sprite->penSaturation, sprite->penBrightness);
+                    drawLineOnCanvas(renderer, sprite->penCanvas, x1, y1, x2, y2, color, sprite->penSize);
+                }
+                sprite->x = newX;
+                sprite->y = newY;
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_TURN:
+                sprite->direction += block->numParam1;
+                ctx->pc++;
+                break;
+            case BLOCK_GOTO:
+                sprite->x = block->numParam1;
+                if (sprite->x > 240) sprite->x = 240;
+                if (sprite->x < -240) sprite->x = -240;
+                sprite->y = block->numParam2;
+                if (sprite->y > 180) sprite->y = 180;
+                if (sprite->y < -180) sprite->y = -180;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_X: {
+                float oldX = sprite->x;
+                sprite->x += block->numParam1;
+                if (sprite->x > 240) sprite->x = 240;
+                if (sprite->x < -240) sprite->x = -240;
+                if (sprite->penDown) {
+                    int x1 = stageRect.x + stageRect.w/2 + (int)oldX;
+                    int y1 = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                    int x2 = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                    int y2 = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                    SDL_Color color = hslToRgb(sprite->penHue, sprite->penSaturation, sprite->penBrightness);
+                    drawLineOnCanvas(renderer, sprite->penCanvas, x1, y1, x2, y2, color, sprite->penSize);
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_CHANGE_Y: {
+                float oldY = sprite->y;
+                sprite->y += block->numParam1;
+                if (sprite->y > 180) sprite->y = 180;
+                if (sprite->y < -180) sprite->y = -180;
+                if (sprite->penDown) {
+                    int x1 = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                    int y1 = stageRect.y + stageRect.h/2 - (int)oldY;
+                    int x2 = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                    int y2 = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                    SDL_Color color = hslToRgb(sprite->penHue, sprite->penSaturation, sprite->penBrightness);
+                    drawLineOnCanvas(renderer, sprite->penCanvas, x1, y1, x2, y2, color, sprite->penSize);
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_SET_DIRECTION:
+                sprite->direction = block->numParam1;
+                ctx->pc++;
+                break;
+            case BLOCK_GO_TO_RANDOM: {
+                float newX = (rand() / (float)RAND_MAX) * 480 - 240;
+                float newY = (rand() / (float)RAND_MAX) * 360 - 180;
+                if (sprite->penDown) {
+                    int x1 = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                    int y1 = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                    int x2 = stageRect.x + stageRect.w/2 + (int)newX;
+                    int y2 = stageRect.y + stageRect.h/2 - (int)newY;
+                    SDL_Color color = hslToRgb(sprite->penHue, sprite->penSaturation, sprite->penBrightness);
+                    drawLineOnCanvas(renderer, sprite->penCanvas, x1, y1, x2, y2, color, sprite->penSize);
+                }
+                sprite->x = newX;
+                sprite->y = newY;
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_GO_TO_MOUSE: {
+                int mouseX, mouseY;
+                SDL_GetMouseState(&mouseX, &mouseY);
+                float newX = mouseX - (stageRect.x + stageRect.w/2);
+                float newY = (stageRect.y + stageRect.h/2) - mouseY;
+                if (newX < -240) newX = -240;
+                if (newX > 240) newX = 240;
+                if (newY < -180) newY = -180;
+                if (newY > 180) newY = 180;
+                if (sprite->penDown) {
+                    int x1 = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                    int y1 = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                    int x2 = stageRect.x + stageRect.w/2 + (int)newX;
+                    int y2 = stageRect.y + stageRect.h/2 - (int)newY;
+                    SDL_Color color = hslToRgb(sprite->penHue, sprite->penSaturation, sprite->penBrightness);
+                    drawLineOnCanvas(renderer, sprite->penCanvas, x1, y1, x2, y2, color, sprite->penSize);
+                }
+                sprite->x = newX;
+                sprite->y = newY;
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_IF_ON_EDGE_BOUNCE: {
+                bool bounced = false;
+                if (sprite->x >= 240) {
+                    sprite->x = 240;
+                    sprite->direction = 180 - sprite->direction;
+                    bounced = true;
+                } else if (sprite->x <= -240) {
+                    sprite->x = -240;
+                    sprite->direction = 180 - sprite->direction;
+                    bounced = true;
+                }
+                if (sprite->y >= 180) {
+                    sprite->y = 180;
+                    sprite->direction = -sprite->direction;
+                    bounced = true;
+                } else if (sprite->y <= -180) {
+                    sprite->y = -180;
+                    sprite->direction = -sprite->direction;
+                    bounced = true;
+                }
+                while (sprite->direction < 0) sprite->direction += 360;
+                while (sprite->direction >= 360) sprite->direction -= 360;
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_SAY: {
+                if (!block->strParam.empty()) {
+                    sprite->sayText = block->strParam;
+                    sprite->thinkText.clear();
+                    if (block->numParam1 > 0) {
+                        sprite->sayUntil = currentTime + (Uint32)(block->numParam1 * 1000);
+                    } else {
+                        sprite->sayUntil = 0;
+                    }
+                } else {
+                    sprite->sayText.clear();
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_THINK: {
+                if (!block->strParam.empty()) {
+                    sprite->thinkText = block->strParam;
+                    sprite->sayText.clear();
+                    if (block->numParam1 > 0) {
+                        sprite->thinkUntil = currentTime + (Uint32)(block->numParam1 * 1000);
+                    } else {
+                        sprite->thinkUntil = 0;
+                    }
+                } else {
+                    sprite->thinkText.clear();
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_SWITCH_COSTUME:
+                if (!block->strParam.empty()) {
+                    for (size_t j = 0; j < sprite->costumes.size(); j++) {
+                        if (sprite->costumes[j]->name == block->strParam) {
+                            sprite->currentCostume = j;
+                            break;
+                        }
+                    }
+                } else {
+                    sprite->currentCostume = (int)block->numParam1;
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_NEXT_COSTUME:
+                if (!sprite->costumes.empty()) {
+                    sprite->currentCostume = (sprite->currentCostume + 1) % sprite->costumes.size();
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_SWITCH_BACKDROP:
+                if (!block->strParam.empty()) {
+                    for (size_t j = 0; j < eng->project->backdrops.size(); j++) {
+                        if (eng->project->backdrops[j]->name == block->strParam) {
+                            eng->project->currentBackdrop = j;
+                            break;
+                        }
+                    }
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_NEXT_BACKDROP:
+                if (!eng->project->backdrops.empty()) {
+                    eng->project->currentBackdrop = (eng->project->currentBackdrop + 1) % eng->project->backdrops.size();
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_SIZE:
+                sprite->size += block->numParam1;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_SIZE:
+                sprite->size = block->numParam1;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_COLOR:
+                sprite->colorEffect += block->numParam1;
+                if (sprite->colorEffect < 0) sprite->colorEffect = 0;
+                if (sprite->colorEffect > 200) sprite->colorEffect = 200;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_COLOR:
+                sprite->colorEffect = block->numParam1;
+                if (sprite->colorEffect < 0) sprite->colorEffect = 0;
+                if (sprite->colorEffect > 200) sprite->colorEffect = 200;
+                ctx->pc++;
+                break;
+            case BLOCK_CLEAR_EFFECTS:
+                sprite->colorEffect = 0;
+                sprite->brightnessEffect = 100;
+                sprite->saturationEffect = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_SHOW:
+                sprite->visible = 1;
+                ctx->pc++;
+                break;
+            case BLOCK_HIDE:
+                sprite->visible = 0;
+                ctx->pc++;
+                break;
+            case BLOCK_GO_TO_LAYER:
+                if (block->strParam == "front") {
+                    sprite->layer = 1000;
+                } else if (block->strParam == "end") {
+                    sprite->layer = -1000;
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_LAYER:
+                sprite->layer += (int)block->numParam1;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_BRIGHTNESS:
+                sprite->brightnessEffect += block->numParam1;
+                if (sprite->brightnessEffect < 0) sprite->brightnessEffect = 0;
+                if (sprite->brightnessEffect > 100) sprite->brightnessEffect = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_BRIGHTNESS:
+                sprite->brightnessEffect = block->numParam1;
+                if (sprite->brightnessEffect < 0) sprite->brightnessEffect = 0;
+                if (sprite->brightnessEffect > 100) sprite->brightnessEffect = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_SATURATION:
+                sprite->saturationEffect += block->numParam1;
+                if (sprite->saturationEffect < 0) sprite->saturationEffect = 0;
+                if (sprite->saturationEffect > 100) sprite->saturationEffect = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_SATURATION:
+                sprite->saturationEffect = block->numParam1;
+                if (sprite->saturationEffect < 0) sprite->saturationEffect = 0;
+                if (sprite->saturationEffect > 100) sprite->saturationEffect = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_PLAY_SOUND: {
+                const char* soundName = block->strParam.c_str();
+                if (soundName) {
+                    int idx = findSoundByName(eng->project, soundName);
+                    if (idx >= 0) {
+                        Sound* snd = eng->project->sounds[idx];
+                        if (snd->chunk && !snd->muted) {
+                            int volume = (int)(snd->volume * MIX_MAX_VOLUME / 100.0f);
+                            Mix_VolumeChunk(snd->chunk, volume);
+                            Mix_PlayChannel(-1, snd->chunk, 0);
+                        }
+                    }
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_PLAY_SOUND_UNTIL_DONE: {
+                const char* soundName = block->strParam.c_str();
+                if (soundName) {
+                    int idx = findSoundByName(eng->project, soundName);
+                    if (idx >= 0) {
+                        Sound* snd = eng->project->sounds[idx];
+                        if (snd->chunk && !snd->muted) {
+                            int volume = (int)(snd->volume * MIX_MAX_VOLUME / 100.0f);
+                            Mix_VolumeChunk(snd->chunk, volume);
+                            int channel = Mix_PlayChannel(-1, snd->chunk, 0);
+                            if (channel >= 0) {
+                                ctx->waitingForSoundChannel = channel;
+                                break;
+                            }
+                        }
+                    }
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_STOP_ALL_SOUNDS:
+                Mix_HaltChannel(-1);
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_VOLUME: {
+                const char* soundName = block->strParam.c_str();
+                if (soundName) {
+                    int idx = findSoundByName(eng->project, soundName);
+                    if (idx >= 0) {
+                        Sound* snd = eng->project->sounds[idx];
+                        snd->volume += block->numParam1;
+                        if (snd->volume < 0) snd->volume = 0;
+                        if (snd->volume > 100) snd->volume = 100;
+                    }
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_SET_VOLUME: {
+                const char* soundName = block->strParam.c_str();
+                if (soundName) {
+                    int idx = findSoundByName(eng->project, soundName);
+                    if (idx >= 0) {
+                        Sound* snd = eng->project->sounds[idx];
+                        snd->volume = block->numParam1;
+                        if (snd->volume < 0) snd->volume = 0;
+                        if (snd->volume > 100) snd->volume = 100;
+                    }
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_WAIT:
+                ctx->waitUntil = currentTime + (Uint32)(block->numParam1 * 1000);
+                break;
+            case BLOCK_REPEAT: {
+                LoopInfo loop;
+                loop.start = ctx->pc + 1;
+                loop.end = block->bodyEnd;
+                loop.count = (int)block->numParam1;
+                ctx->loopStack.push_back(loop);
+                ctx->pc = loop.start;
+                break;
+            }
+            case BLOCK_FOREVER: {
+                LoopInfo loop;
+                loop.start = ctx->pc + 1;
+                loop.end = block->bodyEnd;
+                loop.count = -1;
+                ctx->loopStack.push_back(loop);
+                ctx->pc = loop.start;
+                break;
+            }
+            case BLOCK_IF: {
+                float cond = 0;
+                if (!block->children.empty()) {
+                    Value condVal = evaluateBlock(block->children[0], ctx, eng->project);
+                    cond = value_to_number(condVal);
+                } else {
+                    cond = block->numParam1; // برای سازگاری با عقب
+                }
+                if (cond != 0) {
+                    ctx->pc++;
+                } else {
+                    ctx->pc = block->bodyEnd;
+                }
+                break;
+            }
+            case BLOCK_IF_ELSE: {
+                float cond = 0;
+                if (!block->children.empty()) {
+                    Value condVal = evaluateBlock(block->children[0], ctx, eng->project);
+                    cond = value_to_number(condVal);
+                } else {
+                    cond = block->numParam1;
+                }
+                IfInfo info;
+                info.elseStart = block->elseStart;
+                info.endifPos = block->bodyEnd;
+                info.trueBranch = (cond != 0);
+                ctx->ifStack.push_back(info);
+                if (cond != 0) {
+                    ctx->pc++;
+                } else {
+                    ctx->pc = block->elseStart;
+                }
+                break;
+            }
+            case BLOCK_WAIT_UNTIL: {
+                float cond = 0;
+                if (!block->children.empty()) {
+                    Value condVal = evaluateBlock(block->children[0], ctx, eng->project);
+                    cond = value_to_number(condVal);
+                }
+                if (cond != 0) {
+                    ctx->pc++;
+                }
+                break;
+            }
+            case BLOCK_REPEAT_UNTIL: {
+                float cond = 0;
+                if (!block->children.empty()) {
+                    Value condVal = evaluateBlock(block->children[0], ctx, eng->project);
+                    cond = value_to_number(condVal);
+                }
+                if (cond != 0) {
+                    if (!ctx->loopStack.empty() && ctx->loopStack.back().start == ctx->pc) {
+                        ctx->loopStack.pop_back();
+                    }
+                    ctx->pc = block->bodyEnd;
+                } else {
+                    bool alreadyInLoop = false;
+                    for (const auto& l : ctx->loopStack) {
+                        if (l.start == ctx->pc) {
+                            alreadyInLoop = true;
+                            break;
+                        }
+                    }
+                    if (!alreadyInLoop) {
+                        LoopInfo loop;
+                        loop.start = ctx->pc;
+                        loop.end = block->bodyEnd;
+                        loop.count = -1;
+                        ctx->loopStack.push_back(loop);
+                    }
+                    ctx->pc = ctx->pc + 1;
+                }
+                break;
+            }
+            case BLOCK_STOP_ALL:
+                eng->contexts.clear();
+                return;
+            case BLOCK_BROADCAST:
+            {
+                const char* msg = block->strParam.c_str();
+                if (msg) {
+                    for (size_t s = 0; s < eng->project->sprites.size(); s++) {
+                        Sprite* targetSprite = eng->project->sprites[s];
+                        for (size_t t = 0; t < targetSprite->scripts.size(); t++) {
+                            Script* targetScript = targetSprite->scripts[t];
+                            if (!targetScript->blocks.empty() && targetScript->blocks[0]->type == BLOCK_WHEN_I_RECEIVE) {
+                                if (targetScript->blocks[0]->strParam == msg) {
+                                    ExecutionEngine_addContext(eng, s, t);
+                                }
+                            }
+                        }
+                    }
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_BROADCAST_AND_WAIT:
+            {
+                const char* msg = block->strParam.c_str();
+                if (msg) {
+                    ctx->childrenLeft = 0;
+                    ctx->waitingForChildren = true;
+                    for (size_t s = 0; s < eng->project->sprites.size(); s++) {
+                        Sprite* targetSprite = eng->project->sprites[s];
+                        for (size_t t = 0; t < targetSprite->scripts.size(); t++) {
+                            Script* targetScript = targetSprite->scripts[t];
+                            if (!targetScript->blocks.empty() && targetScript->blocks[0]->type == BLOCK_WHEN_I_RECEIVE) {
+                                if (targetScript->blocks[0]->strParam == msg) {
+                                    ExecutionEngine_addChildContext(eng, s, t, ctx);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (ctx->childrenLeft == 0) {
+                    ctx->pc++;
+                    ctx->waitingForChildren = false;
+                }
+                break;
+            }
+            case BLOCK_SET_VARIABLE: {
+                if (!block->strParam.empty() && !block->children.empty()) {
+                    Value val = evaluateBlock(block->children[0], ctx, eng->project);
+                    setVariable(eng->project, block->strParam, val);
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_CHANGE_VARIABLE: {
+                if (!block->strParam.empty() && !block->children.empty()) {
+                    Value deltaVal = evaluateBlock(block->children[0], ctx, eng->project);
+                    float delta = value_to_number(deltaVal);
+                    Value cur = getVariable(eng->project, block->strParam);
+                    float curNum = value_to_number(cur);
+                    curNum += delta;
+                    Value newVal = make_number(curNum);
+                    setVariable(eng->project, block->strParam, newVal);
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_VARIABLE_GET:
+                ctx->pc++;
+                break;
+            case BLOCK_NUMBER:
+            case BLOCK_STRING:
+            case BLOCK_ADD:
+            case BLOCK_SUBTRACT:
+            case BLOCK_MULTIPLY:
+            case BLOCK_DIVIDE:
+            case BLOCK_RANDOM:
+            case BLOCK_LT:
+            case BLOCK_GT:
+            case BLOCK_EQUALS:
+            case BLOCK_AND:
+            case BLOCK_OR:
+            case BLOCK_NOT:
+            case BLOCK_JOIN:
+            case BLOCK_LETTER_OF:
+            case BLOCK_LENGTH:
+            case BLOCK_MOD:
+            case BLOCK_ROUND:
+            case BLOCK_ABS:
+            case BLOCK_SQRT:
+            case BLOCK_SIN:
+            case BLOCK_COS:
+            case BLOCK_TAN:
+            case BLOCK_ASIN:
+            case BLOCK_ACOS:
+            case BLOCK_ATAN:
+            case BLOCK_LN:
+            case BLOCK_LOG:
+            case BLOCK_POW:
+            case BLOCK_TOUCHING_EDGE:
+            case BLOCK_MOUSE_X:
+            case BLOCK_MOUSE_Y:
+            case BLOCK_KEY_PRESSED:
+            case BLOCK_COSTUME_NUMBER:
+            case BLOCK_COSTUME_NAME:
+            case BLOCK_BACKDROP_NUMBER:
+            case BLOCK_BACKDROP_NAME:
+            case BLOCK_SIZE:
+            case BLOCK_TOUCHING_MOUSEPOINTER:
+            case BLOCK_TOUCHING_SPRITE:
+            case BLOCK_TOUCHING_COLOR:
+            case BLOCK_COLOR_TOUCHING_COLOR:
+            case BLOCK_DISTANCE_TO:
+            case BLOCK_ANSWER:
+            case BLOCK_MOUSE_DOWN:
+            case BLOCK_TIMER:
+                ctx->pc++;
+                break;
+            case BLOCK_ASK_AND_WAIT:
+                SDL_StartTextInput();
+                ctx->waitingForAnswer = true;
+                break;
+            case BLOCK_SET_DRAG_MODE:
+                if (block->strParam == "draggable") {
+                    sprite->draggable = true;
+                } else if (block->strParam == "not draggable") {
+                    sprite->draggable = false;
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_RESET_TIMER:
+                eng->project->timerStart = SDL_GetTicks();
+                ctx->pc++;
+                break;
+            case BLOCK_PEN_DOWN:
+                sprite->penDown = true;
+                ctx->pc++;
+                break;
+            case BLOCK_PEN_UP:
+                sprite->penDown = false;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_PEN_COLOR:
+                sprite->penHue = block->numParam1;
+                if (sprite->penHue < 0) sprite->penHue = 0;
+                if (sprite->penHue > 200) sprite->penHue = 200;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_PEN_COLOR:
+                sprite->penHue += block->numParam1;
+                while (sprite->penHue < 0) sprite->penHue += 200;
+                while (sprite->penHue > 200) sprite->penHue -= 200;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_PEN_BRIGHTNESS:
+                sprite->penBrightness = block->numParam1;
+                if (sprite->penBrightness < 0) sprite->penBrightness = 0;
+                if (sprite->penBrightness > 100) sprite->penBrightness = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_PEN_BRIGHTNESS:
+                sprite->penBrightness += block->numParam1;
+                if (sprite->penBrightness < 0) sprite->penBrightness = 0;
+                if (sprite->penBrightness > 100) sprite->penBrightness = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_PEN_SATURATION:
+                sprite->penSaturation = block->numParam1;
+                if (sprite->penSaturation < 0) sprite->penSaturation = 0;
+                if (sprite->penSaturation > 100) sprite->penSaturation = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_PEN_SATURATION:
+                sprite->penSaturation += block->numParam1;
+                if (sprite->penSaturation < 0) sprite->penSaturation = 0;
+                if (sprite->penSaturation > 100) sprite->penSaturation = 100;
+                ctx->pc++;
+                break;
+            case BLOCK_SET_PEN_SIZE:
+                sprite->penSize = (int)block->numParam1;
+                if (sprite->penSize < 1) sprite->penSize = 1;
+                ctx->pc++;
+                break;
+            case BLOCK_CHANGE_PEN_SIZE:
+                sprite->penSize += (int)block->numParam1;
+                if (sprite->penSize < 1) sprite->penSize = 1;
+                ctx->pc++;
+                break;
+            case BLOCK_ERASE_ALL: {
+                SDL_SetRenderTarget(renderer, sprite->penCanvas);
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+                SDL_RenderClear(renderer);
+                SDL_SetRenderTarget(renderer, NULL);
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_STAMP: {
+                if (!sprite->costumes.empty() && sprite->currentCostume < (int)sprite->costumes.size()) {
+                    Costume* costume = sprite->costumes[sprite->currentCostume];
+                    if (costume->texture) {
+                        int screenX = stageRect.x + stageRect.w/2 + (int)sprite->x;
+                        int screenY = stageRect.y + stageRect.h/2 - (int)sprite->y;
+                        int stampW = (int)(50 * sprite->size / 100.0f);
+                        int stampH = (int)(50 * sprite->size / 100.0f);
+                        SDL_Rect destRect = {screenX - stampW/2, screenY - stampH/2, stampW, stampH};
+                        SDL_SetRenderTarget(renderer, sprite->penCanvas);
+                        SDL_RenderCopy(renderer, costume->texture, NULL, &destRect);
+                        SDL_SetRenderTarget(renderer, NULL);
+                    }
+                }
+                ctx->pc++;
+                break;
+            }
+            case BLOCK_ELSE:
+                if (!ctx->ifStack.empty()) {
+                    IfInfo* top = &ctx->ifStack.back();
+                    if (top->trueBranch) {
+                        ctx->pc = top->endifPos;
+                        ctx->ifStack.pop_back();
+                    } else {
+                        ctx->pc++;
+                    }
+                } else {
+                    ctx->pc++;
+                }
+                break;
+            case BLOCK_ENDIF:
+                if (!ctx->ifStack.empty()) {
+                    ctx->ifStack.pop_back();
+                }
+                ctx->pc++;
+                break;
+            case BLOCK_ENDLOOP:
+                ctx->pc++;
+                break;
+            default:
+                ctx->pc++;
+                break;
+        }
+
+        stepsThisFrame++;
+        if (stepsThisFrame > MAX_STEPS_PER_FRAME) {
+            setError(gApp, "⚠️ حلقه بی‌نهایت تشخیص داده شد! اجرا متوقف شد.");
+            eng->contexts.clear();
+            return;
+        }
+
+        if (block->type != BLOCK_WAIT && block->type != BLOCK_WAIT_UNTIL && block->type != BLOCK_ASK_AND_WAIT) {
+            while (!ctx->loopStack.empty()) {
+                LoopInfo* top = &ctx->loopStack.back();
+                if (ctx->pc == top->end) {
+                    if (top->count == -1) {
+                        ctx->pc = top->start;
+                        break;
+                    } else if (top->count > 0) {
+                        top->count--;
+                        if (top->count > 0) {
+                            ctx->pc = top->start;
+                            break;
+                        } else {
+                            ctx->loopStack.pop_back();
+                        }
+                    } else {
+                        ctx->loopStack.pop_back();
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (eng->stepMode) {
+        eng->stepMode = false;
+        return;
+    }
+}
+
+void ExecutionEngine_run(ExecutionEngine* eng) {
+    eng->contexts.clear();
+    for (size_t i = 0; i < eng->project->sprites.size(); i++) {
+        Sprite* sprite = eng->project->sprites[i];
+        for (size_t j = 0; j < sprite->scripts.size(); j++) {
+            Script* script = sprite->scripts[j];
+            if (!script->blocks.empty() && script->blocks[0]->type == BLOCK_WHEN_FLAG_CLICKED) {
+                ExecutionEngine_addContext(eng, i, j);
+            }
+        }
+    }
+}
+
+void ExecutionEngine_stop(ExecutionEngine* eng) {
+    for (ExecutionContext* ctx : eng->contexts) {
+        delete ctx;
+    }
+    eng->contexts.clear();
+}
+
+void ExecutionEngine_startKeyScripts(ExecutionEngine* eng, SDL_Keycode key) {
+    const char* keyName = NULL;
+    switch (key) {
+        case SDLK_SPACE: keyName = "space"; break;
+        case SDLK_UP: keyName = "up arrow"; break;
+        case SDLK_DOWN: keyName = "down arrow"; break;
+        case SDLK_LEFT: keyName = "left arrow"; break;
+        case SDLK_RIGHT: keyName = "right arrow"; break;
+        case SDLK_a: keyName = "a"; break;
+        case SDLK_b: keyName = "b"; break;
+        case SDLK_c: keyName = "c"; break;
+        case SDLK_d: keyName = "d"; break;
+        case SDLK_e: keyName = "e"; break;
+        case SDLK_f: keyName = "f"; break;
+        case SDLK_g: keyName = "g"; break;
+        case SDLK_h: keyName = "h"; break;
+        case SDLK_i: keyName = "i"; break;
+        case SDLK_j: keyName = "j"; break;
+        case SDLK_k: keyName = "k"; break;
+        case SDLK_l: keyName = "l"; break;
+        case SDLK_m: keyName = "m"; break;
+        case SDLK_n: keyName = "n"; break;
+        case SDLK_o: keyName = "o"; break;
+        case SDLK_p: keyName = "p"; break;
+        case SDLK_q: keyName = "q"; break;
+        case SDLK_r: keyName = "r"; break;
+        case SDLK_s: keyName = "s"; break;
+        case SDLK_t: keyName = "t"; break;
+        case SDLK_u: keyName = "u"; break;
+        case SDLK_v: keyName = "v"; break;
+        case SDLK_w: keyName = "w"; break;
+        case SDLK_x: keyName = "x"; break;
+        case SDLK_y: keyName = "y"; break;
+        case SDLK_z: keyName = "z"; break;
+        case SDLK_0: keyName = "0"; break;
+        case SDLK_1: keyName = "1"; break;
+        case SDLK_2: keyName = "2"; break;
+        case SDLK_3: keyName = "3"; break;
+        case SDLK_4: keyName = "4"; break;
+        case SDLK_5: keyName = "5"; break;
+        case SDLK_6: keyName = "6"; break;
+        case SDLK_7: keyName = "7"; break;
+        case SDLK_8: keyName = "8"; break;
+        case SDLK_9: keyName = "9"; break;
+        default: return;
+    }
+    for (size_t i = 0; i < eng->project->sprites.size(); i++) {
+        Sprite* sprite = eng->project->sprites[i];
+        for (size_t j = 0; j < sprite->scripts.size(); j++) {
+            Script* script = sprite->scripts[j];
+            if (!script->blocks.empty() && script->blocks[0]->type == BLOCK_WHEN_KEY_PRESSED) {
+                if (script->blocks[0]->strParam == keyName) {
+                    ExecutionEngine_addContext(eng, i, j);
+                }
+            }
+        }
+    }
+}
+
+int ExecutionEngine_startSpriteClickScripts(ExecutionEngine* eng, int mouseX, int mouseY, SDL_Rect stageRect) {
+    int topSprite = -1;
+    int topLayer = -1000000;
+    for (size_t i = 0; i < eng->project->sprites.size(); i++) {
+        Sprite* s = eng->project->sprites[i];
+        if (!s->visible) continue;
+        int screenX = stageRect.x + stageRect.w/2 + (int)s->x;
+        int screenY = stageRect.y + stageRect.h/2 - (int)s->y;
+        int spriteW = (int)(50 * s->size / 100.0f);
+        int spriteH = (int)(50 * s->size / 100.0f);
+        SDL_Rect rect = {screenX - spriteW/2, screenY - spriteH/2, spriteW, spriteH};
+        if (mouseX >= rect.x && mouseX <= rect.x + rect.w &&
+            mouseY >= rect.y && mouseY <= rect.y + rect.h) {
+            if (s->layer > topLayer) {
+                topLayer = s->layer;
+                topSprite = i;
+            }
+        }
+    }
+    if (topSprite >= 0) {
+        Sprite* sprite = eng->project->sprites[topSprite];
+        for (size_t j = 0; j < sprite->scripts.size(); j++) {
+            Script* script = sprite->scripts[j];
+            if (!script->blocks.empty() && script->blocks[0]->type == BLOCK_WHEN_SPRITE_CLICKED) {
+                ExecutionEngine_addContext(eng, topSprite, j);
+            }
+        }
+    }
+    return topSprite;
+}
+
+bool findBlockAt(CodeAreaUI* ui, int mouseX, int mouseY, int* outScriptIndex, int* outBlockIndex) {
+    if (ui->selectedSpriteIndex < 0 || ui->selectedSpriteIndex >= (int)ui->project->sprites.size())
+        return false;
+    Sprite* sprite = ui->project->sprites[ui->selectedSpriteIndex];
+    int scriptSpacing = 10;
+    int scriptWidth = 180;
+    int blockHeight = 40;
+    int blockGap = 2;
+
+    for (size_t i = 0; i < sprite->scripts.size(); i++) {
+        int scriptX = ui->rect.x + 10 + i * (scriptWidth + scriptSpacing) - ui->scrollX;
+        if (mouseX < scriptX || mouseX > scriptX + scriptWidth - 10) continue;
+        for (size_t j = 0; j < sprite->scripts[i]->blocks.size(); j++) {
+            int blockY = ui->rect.y + 10 - ui->scrollY + j * (blockHeight + blockGap);
+            if (mouseY >= blockY && mouseY <= blockY + blockHeight) {
+                *outScriptIndex = i;
+                *outBlockIndex = j;
+                return true;
+            }
+        }
+    }
+    return false;
+}
